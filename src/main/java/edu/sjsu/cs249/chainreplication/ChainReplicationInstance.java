@@ -151,8 +151,9 @@ public class ChainReplicationInstance {
             //TODO: what should be the behaviour if this happens
         } else {
             lastXid = result.getLastXid();
-            replicaState = (HashMap<String, Integer>) result.getStateMap();
-
+            for (String key: result.getStateMap().keySet()){
+                replicaState.put(key, result.getStateMap().get(key));
+            }
             List<UpdateRequest> sent = result.getSentList();
             for (UpdateRequest request : sent) {
                 String key = request.getKey();

@@ -32,6 +32,21 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         int lastXid = request.getLastXid();
         int lastAck = request.getLastAck();
         String znodeName = request.getZnodeName();
+
+        //TODO: add logic for state and update request.
+
+        NewSuccessorResponse.Builder builder = NewSuccessorResponse.newBuilder();
+        builder.setRc(0).setLastXid(chainReplicationInstance.lastXid).putAllState(chainReplicationInstance.replicaState);
+
+        for(int key: chainReplicationInstance.pendingUpdateRequests.keySet()) {
+            builder.addSent(UpdateRequest.newBuilder()
+                    .setXid(key)
+                    .setKey(chainReplicationInstance.pendingUpdateRequests.get(key).key)
+                    .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(key).value)
+                    .build());
+        }
+        responseObserver.onNext(builder.build());
+        responseObserver.onCompleted();
     }
 
     @Override

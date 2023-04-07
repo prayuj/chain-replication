@@ -11,6 +11,7 @@ import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.*;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -33,6 +34,7 @@ public class ChainReplicationInstance {
     HashMap<Integer, StreamObserver<HeadResponse>> pendingHeadStreamObserver;
     HashMap <String, Integer> replicaState;
     List<String> replicas;
+    ArrayList <String> logs;
 
     ChainReplicationInstance(String name, String grpcHostPort, String zookeeper_server_list, String control_path) {
         this.name = name;
@@ -47,24 +49,27 @@ public class ChainReplicationInstance {
         pendingUpdateRequests = new HashMap<>();
         pendingHeadStreamObserver = new HashMap<>();
         replicaState = new HashMap<>();
+        logs = new ArrayList<>();
     }
     void start () throws IOException, InterruptedException, KeeperException {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);
         String pathName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
         myReplicaName = pathName.replace(control_path + "/", "");
+        logs.add("Created znode name: " + myReplicaName);
 
         this.getChildrenInPath();
-        System.out.println(replicas.toString());
         this.callPredecessor();
 
         HeadChainReplicaGRPCServer headChainReplicaGRPCServer = new HeadChainReplicaGRPCServer(this);
         TailChainReplicaGRPCServer tailChainReplicaGRPCServer = new TailChainReplicaGRPCServer(this);
         ReplicaGRPCServer replicaGRPCServer = new ReplicaGRPCServer(this);
+        ChainDebugInstance chainDebugInstance = new ChainDebugInstance(this);
 
         Server server = ServerBuilder.forPort(Integer.parseInt(grpcHostPort.split(":")[1]))
                 .addService(headChainReplicaGRPCServer)
                 .addService(tailChainReplicaGRPCServer)
                 .addService(replicaGRPCServer)
+                .addService(chainDebugInstance)
                 .build();
         server.start();
         System.out.printf("will listen on port %s\n", server.getPort());
@@ -87,7 +92,6 @@ public class ChainReplicationInstance {
             System.out.println("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
             try {
                 ChainReplicationInstance.this.getChildrenInPath();
-                System.out.println(replicas.toString());
                 ChainReplicationInstance.this.callPredecessor();
             } catch (InterruptedException | KeeperException e) {
                 System.out.println("Error getting children with getChildrenInPath()");
@@ -104,6 +108,8 @@ public class ChainReplicationInstance {
         List<String> children = zk.getChildren(control_path, childrenWatcher());
         replicas = children.stream().filter(
                 child -> child.contains("replica-")).toList();
+        System.out.println(replicas);
+        logs.add("Current replicas: " + replicas);
     }
 
     /**

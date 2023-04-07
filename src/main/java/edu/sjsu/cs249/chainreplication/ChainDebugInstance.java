@@ -4,6 +4,12 @@ import edu.sjsu.cs249.chain.*;
 import io.grpc.stub.StreamObserver;
 
 public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
+
+    ChainReplicationInstance chainReplicationInstance;
+
+    ChainDebugInstance(ChainReplicationInstance chainReplicationInstance) {
+        this.chainReplicationInstance = chainReplicationInstance;
+    }
     @Override
     public void debug(ChainDebugRequest request, StreamObserver<ChainDebugResponse> responseObserver) {
 

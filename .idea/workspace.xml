@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="575a6921-0b69-46c4-9016-534bad1f2558" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/encodings.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/uiDesigner.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/edu/sjsu/cs249/chainreplication/ChainDebugInstance.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/edu/sjsu/cs249/chainreplication/ChainReplicationInstance.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/edu/sjsu/cs249/chainreplication/HeadChainReplicaGRPCServer.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/edu/sjsu/cs249/chainreplication/Main.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/edu/sjsu/cs249/chainreplication/ReplicaGRPCServer.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/edu/sjsu/cs249/chainreplication/TailChainReplicaGRPCServer.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/proto/chain.proto" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/proto/chain_debug.proto" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Class" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="MarkdownSettingsMigration">
+    <option name="stateVersion" value="1" />
+  </component>
+  <component name="MavenImportPreferences">
+    <option name="importingSettings">
+      <MavenImportingSettings>
+        <option name="workspaceImportEnabled" value="true" />
+      </MavenImportingSettings>
+    </option>
+  </component>
+  <component name="ProjectId" id="2MpnyS33jLIf2u8tqEu0skq9HIB" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "WebServerToolWindowFactoryState": "false",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "project.structure.last.edited": "Modules",
+    "project.structure.proportion": "0.0",
+    "project.structure.side.proportion": "0.0",
+    "settings.editor.selected.configurable": "preferences.editor",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/src/main/proto" />
+      <recent name="$PROJECT_DIR$" />
+    </key>
+  </component>
+  <component name="RunManager">
+    <configuration name="Chain Instance" type="Application" factoryName="Application">
+      <option name="MAIN_CLASS_NAME" value="edu.sjsu.cs249.chainreplication.Main" />
+      <module name="chainreplication" />
+      <option name="PROGRAM_PARAMETERS" value="prayuj 127.0.0.1:4444 127.0.0.1:2181 /chain" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="575a6921-0b69-46c4-9016-534bad1f2558" name="Changes" comment="" />
+      <created>1678473647574</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1678473647574</updated>
+      <workItem from="1678473648981" duration="670000" />
+      <workItem from="1678474857595" duration="9592000" />
+      <workItem from="1678677961916" duration="196000" />
+      <workItem from="1678678164416" duration="4931000" />
+      <workItem from="1678727140823" duration="1117000" />
+      <workItem from="1678734207882" duration="25201000" />
+      <workItem from="1679279559057" duration="598000" />
+      <workItem from="1679359909687" duration="809000" />
+      <workItem from="1679459714508" duration="2960000" />
+      <workItem from="1679500710211" duration="3383000" />
+      <workItem from="1680733578191" duration="12425000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>

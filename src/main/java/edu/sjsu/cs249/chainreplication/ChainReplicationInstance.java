@@ -55,7 +55,6 @@ public class ChainReplicationInstance {
 
         this.getChildrenInPath();
         System.out.println(replicas.toString());
-
         this.callPredecessor();
 
         HeadChainReplicaGRPCServer headChainReplicaGRPCServer = new HeadChainReplicaGRPCServer(this);
@@ -89,54 +88,62 @@ public class ChainReplicationInstance {
             try {
                 ChainReplicationInstance.this.getChildrenInPath();
                 System.out.println(replicas.toString());
+                ChainReplicationInstance.this.callPredecessor();
             } catch (InterruptedException | KeeperException e) {
                 System.out.println("Error getting children with getChildrenInPath()");
             }
         };
     }
 
+    /**
+     Triggers first time on initialize.
+     Triggers when there is a change in children path.
+     Set up a watcher on the path of there are any changes in children.
+     */
     private void getChildrenInPath() throws InterruptedException, KeeperException {
         List<String> children = zk.getChildren(control_path, childrenWatcher());
         replicas = children.stream().filter(
                 child -> child.contains("replica-")).toList();
     }
 
-    private Watcher predecessorWatcher() {
-        return watchedEvent -> {
-            System.out.println("In predecessorWatcher watcher");
-            System.out.println("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
-            try {
-                ChainReplicationInstance.this.getChildrenInPath();
-                System.out.println(replicas.toString());
-                ChainReplicationInstance.this.callPredecessor();
-            } catch (InterruptedException | KeeperException e) {
-                System.out.println("Error in getChildrenInPath() or callPredecessor()");
-            }
-        };
-    }
-
+    /**
+     Triggers first time on initialize.
+     Triggers when there is a change in children path.
+     */
     void callPredecessor() throws InterruptedException, KeeperException {
         List<String> sortedReplicas = replicas.stream().sorted(Comparator.naturalOrder()).toList();
 
         isHead = sortedReplicas.get(0).equals(myReplicaName);
         isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myReplicaName);
 
-        // Call predecessor here
-        if (!isHead) {
-            int index = sortedReplicas.indexOf(myReplicaName);
-            String predecessorReplicaName = sortedReplicas.get(index - 1);
-//            TODO: figure out whether you should be adding a watch to the predecessor my understanding is that you should be, since when it leaves, you have to send a request to a new predecessor
-            String data = new String(zk.getData(control_path + predecessorReplicaName, predecessorWatcher(), null));
-            predecessorAddress = data.split("\n")[0];
-            predecessorName = data.split("\n")[1];
+        //Don't need to call predecessor if you're head! Reset predecessor values
+        if (isHead) {
+            predecessorName = "";
+            predecessorAddress = "";
+            return;
         }
 
+        int index = sortedReplicas.indexOf(myReplicaName);
+        String predecessorReplicaName = sortedReplicas.get(index - 1);
+
+//      TODO: figure out whether you should be adding a watch to the predecessor. Don't need, since you're watching the children path and updating predecessor when necessary
+        String data = new String(zk.getData(control_path + predecessorReplicaName, false, null));
+
+        String newPredecessorAddress = data.split("\n")[0];
+        String newPredecessorName = data.split("\n")[1];
+
+        // If last predecessor is same as the current one, then don't call!
+        if (newPredecessorAddress.equals(predecessorAddress)) return;
+
+        predecessorAddress = newPredecessorAddress;
+        predecessorName = newPredecessorName;
         var channel = this.createChannel(predecessorAddress);
         var stub = ReplicaGrpc.newBlockingStub(channel);
         var newSuccessorRequest = NewSuccessorRequest.newBuilder()
                 .setLastZxidSeen(lastZxidSeen)
                 .setLastXid(lastXid)
-                .setLastAck(lastAck).build();
+                .setLastAck(lastAck)
+                .setZnodeName(myReplicaName).build();
         var result = stub.newSuccessor(newSuccessorRequest);
         int rc = result.getRc();
 

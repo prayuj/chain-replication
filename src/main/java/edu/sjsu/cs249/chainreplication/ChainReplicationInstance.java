@@ -5,6 +5,7 @@ import edu.sjsu.cs249.chain.NewSuccessorRequest;
 import edu.sjsu.cs249.chain.ReplicaGrpc;
 import edu.sjsu.cs249.chain.UpdateRequest;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.ManagedChannel;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
@@ -25,7 +26,8 @@ public class ChainReplicationInstance {
     boolean isHead;
     boolean isTail;
     int lastZxidSeen;
-    int lastXid;
+    int lastUpdateRequestXid;
+    int lastProcessedXid;
     int lastAck;
     String myReplicaName;
     String predecessorAddress;
@@ -44,7 +46,8 @@ public class ChainReplicationInstance {
         isHead = false;
         isTail = false;
         lastZxidSeen = -1;
-        lastXid = -1;
+        lastUpdateRequestXid = -1;
+        lastProcessedXid = -1;
         lastAck = -1;
         pendingUpdateRequests = new HashMap<>();
         pendingHeadStreamObserver = new HashMap<>();
@@ -88,8 +91,10 @@ public class ChainReplicationInstance {
 
     private Watcher childrenWatcher() {
         return watchedEvent -> {
+            ChainReplicationInstance.this.logs.add("childrenWatcher triggered");
             System.out.println("In childrenWatcher");
             System.out.println("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
+            ChainReplicationInstance.this.logs.add("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
             try {
                 ChainReplicationInstance.this.getChildrenInPath();
                 ChainReplicationInstance.this.callPredecessor();
@@ -121,6 +126,7 @@ public class ChainReplicationInstance {
 
         isHead = sortedReplicas.get(0).equals(myReplicaName);
         isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myReplicaName);
+        logs.add("isHead: " + isHead + ", isTail: " + isTail);
 
         //Don't need to call predecessor if you're head! Reset predecessor values
         if (isHead) {
@@ -132,7 +138,7 @@ public class ChainReplicationInstance {
         int index = sortedReplicas.indexOf(myReplicaName);
         String predecessorReplicaName = sortedReplicas.get(index - 1);
 
-//      TODO: figure out whether you should be adding a watch to the predecessor. Don't need, since you're watching the children path and updating predecessor when necessary
+//      Don't need to watch, since you're watching the children path, and it will trigger when predecessor goes
         String data = new String(zk.getData(control_path + "/" + predecessorReplicaName, false, null));
 
         String newPredecessorAddress = data.split("\n")[0];
@@ -141,36 +147,54 @@ public class ChainReplicationInstance {
         // If last predecessor is same as the current one, then don't call!
         if (newPredecessorAddress.equals(predecessorAddress)) return;
 
+        logs.add("new predecessor");
+        logs.add("newPredecessorAddress: " + newPredecessorAddress);
+        logs.add("newPredecessorName: " + newPredecessorName);
+
+        logs.add("calling newSuccessor of new predecessor.");
+        logs.add("params:" +
+                ", lastZxidSeen: " + lastZxidSeen +
+                ", lastXid: " + lastUpdateRequestXid +
+                ", lastAck: " + lastAck +
+                ", myReplicaName: " + myReplicaName);
+
         predecessorAddress = newPredecessorAddress;
         predecessorName = newPredecessorName;
         var channel = this.createChannel(predecessorAddress);
         var stub = ReplicaGrpc.newBlockingStub(channel);
         var newSuccessorRequest = NewSuccessorRequest.newBuilder()
                 .setLastZxidSeen(lastZxidSeen)
-                .setLastXid(lastXid)
+                .setLastXid(lastUpdateRequestXid)
                 .setLastAck(lastAck)
                 .setZnodeName(myReplicaName).build();
         var result = stub.newSuccessor(newSuccessorRequest);
         int rc = result.getRc();
 
+        logs.add("Response received");
+        logs.add("rc: " + rc);
         if (rc == -1) {
             //TODO: what should be the behaviour if this happens
         } else {
-            lastXid = result.getLastXid();
+            lastUpdateRequestXid = result.getLastXid();
+            logs.add("lastXid: " + lastUpdateRequestXid);
+            logs.add("state value:");
             for (String key: result.getStateMap().keySet()){
                 replicaState.put(key, result.getStateMap().get(key));
+                logs.add(key + ": " + result.getStateMap().get(key));
             }
             List<UpdateRequest> sent = result.getSentList();
+            logs.add("sent requests: ");
             for (UpdateRequest request : sent) {
                 String key = request.getKey();
                 int newValue = request.getNewValue();
                 int xid = request.getXid();
                 pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+                logs.add("xid: " + xid + ", key: " + key + ", value: " + newValue);
             }
         }
     }
 
-    public io.grpc.ManagedChannel createChannel(String serverAddress){
+    public ManagedChannel createChannel(String serverAddress){
         var lastColon = serverAddress.lastIndexOf(':');
         var host = serverAddress.substring(0, lastColon);
         var port = Integer.parseInt(serverAddress.substring(lastColon+1));

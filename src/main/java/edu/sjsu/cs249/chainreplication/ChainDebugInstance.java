@@ -12,7 +12,21 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
     }
     @Override
     public void debug(ChainDebugRequest request, StreamObserver<ChainDebugResponse> responseObserver) {
+        ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
+        builder
+            .setXid(chainReplicationInstance.lastProcessedXid)
+            .putAllState(chainReplicationInstance.replicaState)
+            .addAllLogs(chainReplicationInstance.logs);
 
+        for(int key: chainReplicationInstance.pendingUpdateRequests.keySet()) {
+            builder.addSent(UpdateRequest.newBuilder()
+                    .setXid(key)
+                    .setKey(chainReplicationInstance.pendingUpdateRequests.get(key).key)
+                    .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(key).value)
+                    .build());
+        }
+        responseObserver.onNext(builder.build());
+        responseObserver.onCompleted();
     }
 
     @Override

@@ -50,8 +50,8 @@ public class ChainReplicationInstance {
     }
     void start () throws IOException, InterruptedException, KeeperException {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);
-        myReplicaName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
-
+        String pathName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+        myReplicaName = pathName.replace(control_path + "/", "");
 
         this.getChildrenInPath();
         System.out.println(replicas.toString());
@@ -127,7 +127,7 @@ public class ChainReplicationInstance {
         String predecessorReplicaName = sortedReplicas.get(index - 1);
 
 //      TODO: figure out whether you should be adding a watch to the predecessor. Don't need, since you're watching the children path and updating predecessor when necessary
-        String data = new String(zk.getData(control_path + predecessorReplicaName, false, null));
+        String data = new String(zk.getData(control_path + "/" + predecessorReplicaName, false, null));
 
         String newPredecessorAddress = data.split("\n")[0];
         String newPredecessorName = data.split("\n")[1];

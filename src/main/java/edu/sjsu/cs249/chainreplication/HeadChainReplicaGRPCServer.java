@@ -10,9 +10,9 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
     }
     @Override
     public void increment(IncRequest request, StreamObserver<HeadResponse> responseObserver) {
-        chainReplicationInstance.logs.add("increment grpc called");
+        chainReplicationInstance.addLog("increment grpc called");
         if (!chainReplicationInstance.isHead) {
-            chainReplicationInstance.logs.add("not head, cannot update");
+            chainReplicationInstance.addLog("not head, cannot update");
             responseObserver.onNext(HeadResponse.newBuilder().setRc(1).build());
             responseObserver.onCompleted();
             return;
@@ -21,18 +21,33 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
         int incrementer = request.getIncValue();
         int newValue;
         if (chainReplicationInstance.replicaState.containsKey(key)) {
-            chainReplicationInstance.logs.add("key: " + key + ", " + "oldValue: " + chainReplicationInstance.replicaState.get(key));
+            chainReplicationInstance.addLog("key: " + key + ", " + "oldValue: " + chainReplicationInstance.replicaState.get(key));
             newValue = chainReplicationInstance.replicaState.get(key) + incrementer;
         } else {
-            chainReplicationInstance.logs.add("key: " + key + ", " + "oldValue: " + 0);
+            chainReplicationInstance.addLog("key: " + key + ", " + "oldValue: " + 0);
             newValue = incrementer;
         }
 
-        chainReplicationInstance.logs.add("key: " + key + ", " + "newValue: " + newValue);
+        chainReplicationInstance.addLog("key: " + key + ", " + "newValue: " + newValue);
         chainReplicationInstance.replicaState.put(key, newValue);
-        ++chainReplicationInstance.lastUpdateRequestXid;
-        chainReplicationInstance.logs.add("xid generated: " + chainReplicationInstance.lastUpdateRequestXid);
-        chainReplicationInstance.pendingUpdateRequests.put(chainReplicationInstance.lastUpdateRequestXid, new HashTableEntry(key, newValue));
-        chainReplicationInstance.pendingHeadStreamObserver.put(chainReplicationInstance.lastUpdateRequestXid, responseObserver);
+        int xid = ++chainReplicationInstance.lastUpdateRequestXid;
+        chainReplicationInstance.addLog("xid generated: " + xid);
+
+        if (chainReplicationInstance.isTail) {
+            chainReplicationInstance.lastProcessedXid = xid;
+            responseObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
+            responseObserver.onCompleted();
+        } else {
+            chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+            chainReplicationInstance.pendingHeadStreamObserver.put(xid, responseObserver);
+            var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
+            var stub = ReplicaGrpc.newBlockingStub(channel);
+            var updateRequest = UpdateRequest.newBuilder()
+                    .setXid(xid)
+                    .setKey(key)
+                    .setNewValue(newValue)
+                    .build();
+            stub.update(updateRequest);
+        }
     }
 }

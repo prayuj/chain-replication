@@ -12,6 +12,7 @@ import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.*;
 
 import java.io.IOException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -32,6 +33,7 @@ public class ChainReplicationInstance {
     String myReplicaName;
     String predecessorAddress;
     String predecessorName;
+    String successorAddress;
     HashMap <Integer, HashTableEntry> pendingUpdateRequests;
     HashMap<Integer, StreamObserver<HeadResponse>> pendingHeadStreamObserver;
     HashMap <String, Integer> replicaState;
@@ -49,6 +51,7 @@ public class ChainReplicationInstance {
         lastUpdateRequestXid = -1;
         lastProcessedXid = -1;
         lastAck = -1;
+        successorAddress = "";
         pendingUpdateRequests = new HashMap<>();
         pendingHeadStreamObserver = new HashMap<>();
         replicaState = new HashMap<>();
@@ -58,7 +61,7 @@ public class ChainReplicationInstance {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);
         String pathName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
         myReplicaName = pathName.replace(control_path + "/", "");
-        logs.add("Created znode name: " + myReplicaName);
+        addLog("Created znode name: " + myReplicaName);
 
         this.getChildrenInPath();
         this.callPredecessor();
@@ -91,10 +94,10 @@ public class ChainReplicationInstance {
 
     private Watcher childrenWatcher() {
         return watchedEvent -> {
-            ChainReplicationInstance.this.logs.add("childrenWatcher triggered");
+            ChainReplicationInstance.this.addLog("childrenWatcher triggered");
             System.out.println("In childrenWatcher");
             System.out.println("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
-            ChainReplicationInstance.this.logs.add("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
+            ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
             try {
                 ChainReplicationInstance.this.getChildrenInPath();
                 ChainReplicationInstance.this.callPredecessor();
@@ -114,7 +117,7 @@ public class ChainReplicationInstance {
         replicas = children.stream().filter(
                 child -> child.contains("replica-")).toList();
         System.out.println(replicas);
-        logs.add("Current replicas: " + replicas);
+        addLog("Current replicas: " + replicas);
     }
 
     /**
@@ -126,7 +129,7 @@ public class ChainReplicationInstance {
 
         isHead = sortedReplicas.get(0).equals(myReplicaName);
         isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myReplicaName);
-        logs.add("isHead: " + isHead + ", isTail: " + isTail);
+        addLog("isHead: " + isHead + ", isTail: " + isTail);
 
         //Don't need to call predecessor if you're head! Reset predecessor values
         if (isHead) {
@@ -147,12 +150,12 @@ public class ChainReplicationInstance {
         // If last predecessor is same as the current one, then don't call!
         if (newPredecessorAddress.equals(predecessorAddress)) return;
 
-        logs.add("new predecessor");
-        logs.add("newPredecessorAddress: " + newPredecessorAddress);
-        logs.add("newPredecessorName: " + newPredecessorName);
+        addLog("new predecessor");
+        addLog("newPredecessorAddress: " + newPredecessorAddress);
+        addLog("newPredecessorName: " + newPredecessorName);
 
-        logs.add("calling newSuccessor of new predecessor.");
-        logs.add("params:" +
+        addLog("calling newSuccessor of new predecessor.");
+        addLog("params:" +
                 ", lastZxidSeen: " + lastZxidSeen +
                 ", lastXid: " + lastUpdateRequestXid +
                 ", lastAck: " + lastAck +
@@ -170,26 +173,26 @@ public class ChainReplicationInstance {
         var result = stub.newSuccessor(newSuccessorRequest);
         int rc = result.getRc();
 
-        logs.add("Response received");
-        logs.add("rc: " + rc);
+        addLog("Response received");
+        addLog("rc: " + rc);
         if (rc == -1) {
             //TODO: what should be the behaviour if this happens
         } else {
             lastUpdateRequestXid = result.getLastXid();
-            logs.add("lastXid: " + lastUpdateRequestXid);
-            logs.add("state value:");
+            addLog("lastXid: " + lastUpdateRequestXid);
+            addLog("state value:");
             for (String key: result.getStateMap().keySet()){
                 replicaState.put(key, result.getStateMap().get(key));
-                logs.add(key + ": " + result.getStateMap().get(key));
+                addLog(key + ": " + result.getStateMap().get(key));
             }
             List<UpdateRequest> sent = result.getSentList();
-            logs.add("sent requests: ");
+            addLog("sent requests: ");
             for (UpdateRequest request : sent) {
                 String key = request.getKey();
                 int newValue = request.getNewValue();
                 int xid = request.getXid();
                 pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
-                logs.add("xid: " + xid + ", key: " + key + ", value: " + newValue);
+                addLog("xid: " + xid + ", key: " + key + ", value: " + newValue);
             }
         }
     }
@@ -202,6 +205,11 @@ public class ChainReplicationInstance {
                 .forAddress(host, port)
                 .usePlaintext()
                 .build();
+    }
+
+    public void addLog(String message) {
+        Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+        logs.add(timestamp + " " + message);
     }
 }
 

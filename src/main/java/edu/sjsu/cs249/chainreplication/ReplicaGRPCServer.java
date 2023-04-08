@@ -3,6 +3,7 @@ package edu.sjsu.cs249.chainreplication;
 import edu.sjsu.cs249.chain.ReplicaGrpc;
 import edu.sjsu.cs249.chain.*;
 import io.grpc.stub.StreamObserver;
+import org.apache.zookeeper.KeeperException;
 
 public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     ChainReplicationInstance chainReplicationInstance;
@@ -11,34 +12,52 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     }
     @Override
     public void update(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
-        chainReplicationInstance.logs.add("update grpc called");
+        chainReplicationInstance.addLog("update grpc called");
 
         String key = request.getKey();
         int newValue = request.getNewValue();
         int xid = request.getXid();
 
-        chainReplicationInstance.logs.add("key: " + key + ", newValue: " + newValue);
+        chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
         chainReplicationInstance.replicaState.put(key, newValue);
+
+        chainReplicationInstance.lastUpdateRequestXid = xid;
         chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
 
         responseObserver.onNext(UpdateResponse.newBuilder().build());
         responseObserver.onCompleted();
 
-//        TODO:
-//        1. If not tail, tell successor of this update
-//        2. If tail, ack to your predecessor
+        /*
+         * TODO:
+         *  1. If tail, ack to your predecessor
+         *  2. else, tell successor of this update */
 
+        chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
         if (chainReplicationInstance.isTail) {
-
+            chainReplicationInstance.addLog("I am tail, ack back!");
+            chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
+            chainReplicationInstance.lastProcessedXid = xid;
+            chainReplicationInstance.pendingUpdateRequests.remove(xid);
+            var channel = chainReplicationInstance.createChannel(chainReplicationInstance.predecessorAddress);
+            var stub = ReplicaGrpc.newBlockingStub(channel);
+            var ackRequest = AckRequest.newBuilder()
+                    .setXid(xid).build();
+            stub.ack(ackRequest);
         } else {
-
+            var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
+            var stub = ReplicaGrpc.newBlockingStub(channel);
+            var updateRequest = UpdateRequest.newBuilder()
+                    .setXid(xid)
+                    .setKey(key)
+                    .setNewValue(newValue)
+                    .build();
+            stub.update(updateRequest);
         }
-
     }
 
     @Override
     public void newSuccessor(NewSuccessorRequest request, StreamObserver<NewSuccessorResponse> responseObserver) {
-        chainReplicationInstance.logs.add("newSuccessor grpc called");
+        chainReplicationInstance.addLog("newSuccessor grpc called");
 
         long lastZxidSeen = request.getLastZxidSeen();
         int lastXid = request.getLastXid();
@@ -50,22 +69,31 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         NewSuccessorResponse.Builder builder = NewSuccessorResponse.newBuilder();
         builder.setRc(0).setLastXid(chainReplicationInstance.lastUpdateRequestXid).putAllState(chainReplicationInstance.replicaState);
 
-        chainReplicationInstance.logs.add("response values:");
-        chainReplicationInstance.logs.add(
+        chainReplicationInstance.addLog("response values:");
+        chainReplicationInstance.addLog(
                 "rc: " + 0 +
                 ", lastXid: " + chainReplicationInstance.lastUpdateRequestXid +
                 ", state: " + chainReplicationInstance.replicaState.toString());
-        chainReplicationInstance.logs.add("pending request values:");
+        chainReplicationInstance.addLog("pending request values:");
         for(int xid: chainReplicationInstance.pendingUpdateRequests.keySet()) {
             builder.addSent(UpdateRequest.newBuilder()
                     .setXid(xid)
                     .setKey(chainReplicationInstance.pendingUpdateRequests.get(xid).key)
                     .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(xid).value)
                     .build());
-            chainReplicationInstance.logs.add(
+            chainReplicationInstance.addLog(
                     "xid: " + xid +
                     ", key: " + chainReplicationInstance.pendingUpdateRequests.get(xid).key +
                     ", value: "+ chainReplicationInstance.pendingUpdateRequests.get(xid).value);
+        }
+        try {
+            String data = new String(chainReplicationInstance.zk.getData(chainReplicationInstance.control_path + "/" + znodeName, false, null));
+            chainReplicationInstance.successorAddress = data.split("\n")[0];
+            chainReplicationInstance.addLog("new successor");
+            chainReplicationInstance.addLog("successorAddress: " + chainReplicationInstance.successorAddress);
+            chainReplicationInstance.addLog("successor name: " + data.split("\n")[1]);
+        } catch (InterruptedException | KeeperException e) {
+            chainReplicationInstance.addLog("error in getting successor address from zookeeper");
         }
         responseObserver.onNext(builder.build());
         responseObserver.onCompleted();
@@ -73,22 +101,23 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
 
     @Override
     public void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
-        chainReplicationInstance.logs.add("ack grpc called");
+        chainReplicationInstance.addLog("ack grpc called");
         int xid = request.getXid();
 
         chainReplicationInstance.lastProcessedXid = xid;
+        chainReplicationInstance.lastAck = xid;
         chainReplicationInstance.pendingUpdateRequests.remove(xid);
 
         responseObserver.onNext(AckResponse.newBuilder().build());
         responseObserver.onCompleted();
 
         if (chainReplicationInstance.isHead) {
-            chainReplicationInstance.logs.add("sending response back to client");
+            chainReplicationInstance.addLog("sending response back to client");
             StreamObserver<HeadResponse> headResponseStreamObserver = chainReplicationInstance.pendingHeadStreamObserver.remove(xid);
             headResponseStreamObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
             headResponseStreamObserver.onCompleted();
         } else {
-            chainReplicationInstance.logs.add("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
+            chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
             var channel = chainReplicationInstance.createChannel(chainReplicationInstance.predecessorAddress);
             var stub = ReplicaGrpc.newBlockingStub(channel);
             stub.ack(AckRequest.newBuilder().setXid(xid).build());

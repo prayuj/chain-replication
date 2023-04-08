@@ -40,6 +40,9 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
         } else {
             chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
             chainReplicationInstance.pendingHeadStreamObserver.put(xid, responseObserver);
+
+            if (!chainReplicationInstance.hasSuccessorContacted) return;
+
             var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
             var stub = ReplicaGrpc.newBlockingStub(channel);
             var updateRequest = UpdateRequest.newBuilder()

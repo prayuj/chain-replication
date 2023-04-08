@@ -32,8 +32,9 @@ public class ChainReplicationInstance {
     int lastAck;
     String myReplicaName;
     String predecessorAddress;
-    String predecessorName;
     String successorAddress;
+    String successorReplicaName;
+    boolean hasSuccessorContacted;
     HashMap <Integer, HashTableEntry> pendingUpdateRequests;
     HashMap<Integer, StreamObserver<HeadResponse>> pendingHeadStreamObserver;
     HashMap <String, Integer> replicaState;
@@ -52,10 +53,12 @@ public class ChainReplicationInstance {
         lastProcessedXid = -1;
         lastAck = -1;
         successorAddress = "";
+        successorReplicaName = "";
         pendingUpdateRequests = new HashMap<>();
         pendingHeadStreamObserver = new HashMap<>();
         replicaState = new HashMap<>();
         logs = new ArrayList<>();
+        hasSuccessorContacted = false;
     }
     void start () throws IOException, InterruptedException, KeeperException {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);
@@ -64,7 +67,7 @@ public class ChainReplicationInstance {
         addLog("Created znode name: " + myReplicaName);
 
         this.getChildrenInPath();
-        this.callPredecessor();
+        this.callPredecessorAndCheckNewSuccessor();
 
         HeadChainReplicaGRPCServer headChainReplicaGRPCServer = new HeadChainReplicaGRPCServer(this);
         TailChainReplicaGRPCServer tailChainReplicaGRPCServer = new TailChainReplicaGRPCServer(this);
@@ -100,7 +103,7 @@ public class ChainReplicationInstance {
             ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
             try {
                 ChainReplicationInstance.this.getChildrenInPath();
-                ChainReplicationInstance.this.callPredecessor();
+                ChainReplicationInstance.this.callPredecessorAndCheckNewSuccessor();
             } catch (InterruptedException | KeeperException e) {
                 System.out.println("Error getting children with getChildrenInPath()");
             }
@@ -124,7 +127,7 @@ public class ChainReplicationInstance {
      Triggers first time on initialize.
      Triggers when there is a change in children path.
      */
-    void callPredecessor() throws InterruptedException, KeeperException {
+    void callPredecessorAndCheckNewSuccessor() throws InterruptedException, KeeperException {
         List<String> sortedReplicas = replicas.stream().sorted(Comparator.naturalOrder()).toList();
 
         isHead = sortedReplicas.get(0).equals(myReplicaName);
@@ -133,7 +136,6 @@ public class ChainReplicationInstance {
 
         //Don't need to call predecessor if you're head! Reset predecessor values
         if (isHead) {
-            predecessorName = "";
             predecessorAddress = "";
             return;
         }
@@ -162,7 +164,6 @@ public class ChainReplicationInstance {
                 ", myReplicaName: " + myReplicaName);
 
         predecessorAddress = newPredecessorAddress;
-        predecessorName = newPredecessorName;
         var channel = this.createChannel(predecessorAddress);
         var stub = ReplicaGrpc.newBlockingStub(channel);
         var newSuccessorRequest = NewSuccessorRequest.newBuilder()
@@ -195,6 +196,20 @@ public class ChainReplicationInstance {
                 addLog("xid: " + xid + ", key: " + key + ", value: " + newValue);
             }
         }
+
+        if(isTail) {
+            successorReplicaName = "";
+            successorAddress = "";
+            hasSuccessorContacted = false;
+            return;
+        }
+
+        String newSuccessorReplicaName = sortedReplicas.get(index + 1);
+        // If the curr successor replica name matches the new one,
+        // then hasSuccessorContacted should be the old value of hasSuccessorContacted
+        // else it should be false
+        hasSuccessorContacted = newSuccessorReplicaName.equals(successorReplicaName) && hasSuccessorContacted;
+
     }
 
     public ManagedChannel createChannel(String serverAddress){

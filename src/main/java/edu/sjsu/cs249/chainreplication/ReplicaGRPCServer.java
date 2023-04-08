@@ -43,7 +43,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             var ackRequest = AckRequest.newBuilder()
                     .setXid(xid).build();
             stub.ack(ackRequest);
-        } else {
+        } else if (chainReplicationInstance.hasSuccessorContacted) {
             var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
             var stub = ReplicaGrpc.newBlockingStub(channel);
             var updateRequest = UpdateRequest.newBuilder()
@@ -87,6 +87,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
                     ", value: "+ chainReplicationInstance.pendingUpdateRequests.get(xid).value);
         }
         try {
+            chainReplicationInstance.successorReplicaName = znodeName;
             String data = new String(chainReplicationInstance.zk.getData(chainReplicationInstance.control_path + "/" + znodeName, false, null));
             chainReplicationInstance.successorAddress = data.split("\n")[0];
             chainReplicationInstance.addLog("new successor");
@@ -95,6 +96,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         } catch (InterruptedException | KeeperException e) {
             chainReplicationInstance.addLog("error in getting successor address from zookeeper");
         }
+        chainReplicationInstance.hasSuccessorContacted = true;
         responseObserver.onNext(builder.build());
         responseObserver.onCompleted();
     }

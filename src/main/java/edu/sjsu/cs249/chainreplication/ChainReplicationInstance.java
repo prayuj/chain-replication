@@ -28,8 +28,7 @@ public class ChainReplicationInstance {
     boolean isTail;
     int lastZxidSeen;
     int lastUpdateRequestXid;
-    int lastProcessedXid;
-    int lastAck;
+    int lastAckXid;
     String myReplicaName;
     String predecessorAddress;
     String successorAddress;
@@ -50,8 +49,7 @@ public class ChainReplicationInstance {
         isTail = false;
         lastZxidSeen = -1;
         lastUpdateRequestXid = -1;
-        lastProcessedXid = -1;
-        lastAck = -1;
+        lastAckXid = -1;
         successorAddress = "";
         successorReplicaName = "";
         pendingUpdateRequests = new HashMap<>();
@@ -160,7 +158,7 @@ public class ChainReplicationInstance {
         addLog("params:" +
                 ", lastZxidSeen: " + lastZxidSeen +
                 ", lastXid: " + lastUpdateRequestXid +
-                ", lastAck: " + lastAck +
+                ", lastAck: " + lastAckXid +
                 ", myReplicaName: " + myReplicaName);
 
         predecessorAddress = newPredecessorAddress;
@@ -169,7 +167,7 @@ public class ChainReplicationInstance {
         var newSuccessorRequest = NewSuccessorRequest.newBuilder()
                 .setLastZxidSeen(lastZxidSeen)
                 .setLastXid(lastUpdateRequestXid)
-                .setLastAck(lastAck)
+                .setLastAck(lastAckXid)
                 .setZnodeName(myReplicaName).build();
         var result = stub.newSuccessor(newSuccessorRequest);
         int rc = result.getRc();
@@ -186,15 +184,11 @@ public class ChainReplicationInstance {
                 replicaState.put(key, result.getStateMap().get(key));
                 addLog(key + ": " + result.getStateMap().get(key));
             }
-            List<UpdateRequest> sent = result.getSentList();
-            addLog("sent requests: ");
-            for (UpdateRequest request : sent) {
-                String key = request.getKey();
-                int newValue = request.getNewValue();
-                int xid = request.getXid();
-                pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
-                addLog("xid: " + xid + ", key: " + key + ", value: " + newValue);
-            }
+            addPendingUpdateRequests(result);
+        } else {
+            lastUpdateRequestXid = result.getLastXid();
+            addLog("lastXid: " + lastUpdateRequestXid);
+            addPendingUpdateRequests(result);
         }
 
         if(isTail) {

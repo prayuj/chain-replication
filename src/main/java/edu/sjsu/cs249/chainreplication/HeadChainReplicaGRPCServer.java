@@ -34,7 +34,7 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
         chainReplicationInstance.addLog("xid generated: " + xid);
 
         if (chainReplicationInstance.isTail) {
-            chainReplicationInstance.lastProcessedXid = xid;
+            chainReplicationInstance.lastAckXid = xid;
             responseObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
             responseObserver.onCompleted();
         } else {

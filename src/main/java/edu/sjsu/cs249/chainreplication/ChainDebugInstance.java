@@ -14,7 +14,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
     public void debug(ChainDebugRequest request, StreamObserver<ChainDebugResponse> responseObserver) {
         ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
         builder
-            .setXid(chainReplicationInstance.lastProcessedXid)
+            .setXid(chainReplicationInstance.lastAckXid)
             .putAllState(chainReplicationInstance.replicaState)
             .addAllLogs(chainReplicationInstance.logs);
 

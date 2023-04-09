@@ -1,15 +1,13 @@
 package edu.sjsu.cs249.chainreplication;
 
-import edu.sjsu.cs249.chain.HeadResponse;
-import edu.sjsu.cs249.chain.NewSuccessorRequest;
-import edu.sjsu.cs249.chain.ReplicaGrpc;
-import edu.sjsu.cs249.chain.UpdateRequest;
+import edu.sjsu.cs249.chain.*;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.ManagedChannel;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.*;
+import org.apache.zookeeper.data.Stat;
 
 import java.io.IOException;
 import java.sql.Timestamp;
@@ -26,7 +24,7 @@ public class ChainReplicationInstance {
     ZooKeeper zk;
     boolean isHead;
     boolean isTail;
-    int lastZxidSeen;
+    long lastZxidSeen;
     int lastUpdateRequestXid;
     int lastAckXid;
     String myReplicaName;
@@ -96,14 +94,13 @@ public class ChainReplicationInstance {
     private Watcher childrenWatcher() {
         return watchedEvent -> {
             ChainReplicationInstance.this.addLog("childrenWatcher triggered");
-            System.out.println("In childrenWatcher");
-            System.out.println("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
+            ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
             ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
             try {
                 ChainReplicationInstance.this.getChildrenInPath();
                 ChainReplicationInstance.this.callPredecessorAndCheckNewSuccessor();
             } catch (InterruptedException | KeeperException e) {
-                System.out.println("Error getting children with getChildrenInPath()");
+                ChainReplicationInstance.this.addLog("Error getting children with getChildrenInPath()");
             }
         };
     }
@@ -114,11 +111,13 @@ public class ChainReplicationInstance {
      Set up a watcher on the path of there are any changes in children.
      */
     private void getChildrenInPath() throws InterruptedException, KeeperException {
-        List<String> children = zk.getChildren(control_path, childrenWatcher());
+        Stat replicaPath = new Stat();
+        List<String> children = zk.getChildren(control_path, childrenWatcher(), replicaPath);
+        lastZxidSeen = replicaPath.getPzxid();
         replicas = children.stream().filter(
                 child -> child.contains("replica-")).toList();
-        System.out.println(replicas);
-        addLog("Current replicas: " + replicas);
+        addLog("Current replicas: " + replicas +
+                ", lastZxidSeen: " + lastZxidSeen);
     }
 
     /**
@@ -170,13 +169,16 @@ public class ChainReplicationInstance {
                 .setLastAck(lastAckXid)
                 .setZnodeName(myReplicaName).build();
         var result = stub.newSuccessor(newSuccessorRequest);
+        channel.shutdown();
+
         int rc = result.getRc();
 
         addLog("Response received");
         addLog("rc: " + rc);
         if (rc == -1) {
-            //TODO: what should be the behaviour if this happens
-        } else {
+            this.getChildrenInPath();
+            this.callPredecessorAndCheckNewSuccessor();
+        } else if (rc == 0) {
             lastUpdateRequestXid = result.getLastXid();
             addLog("lastXid: " + lastUpdateRequestXid);
             addLog("state value:");
@@ -206,6 +208,39 @@ public class ChainReplicationInstance {
 
     }
 
+    private void addPendingUpdateRequests(NewSuccessorResponse result) {
+        List<UpdateRequest> sent = result.getSentList();
+        addLog("sent requests: ");
+        for (UpdateRequest request : sent) {
+            String key = request.getKey();
+            int newValue = request.getNewValue();
+            int xid = request.getXid();
+            pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+            addLog("xid: " + xid + ", key: " + key + ", value: " + newValue);
+        }
+
+        if (isTail) {
+            addLog("I am tail, have to ack back all pending requests!");
+            for (int xid: pendingUpdateRequests.keySet()) {
+                ackXid(xid);
+            }
+        }
+    }
+
+    public void ackXid (int xid) {
+        addLog("calling ack method of predecessor: " + predecessorAddress);
+        lastAckXid = xid;
+        pendingUpdateRequests.remove(xid);
+        addLog("lastAckXid: " + lastAckXid);
+        var channel = this.createChannel(this.predecessorAddress);
+        var stub = ReplicaGrpc.newBlockingStub(channel);
+        var ackRequest = AckRequest.newBuilder()
+                .setXid(xid).build();
+        stub.ack(ackRequest);
+        channel.shutdown();
+
+    }
+
     public ManagedChannel createChannel(String serverAddress){
         var lastColon = serverAddress.lastIndexOf(':');
         var host = serverAddress.substring(0, lastColon);
@@ -219,6 +254,7 @@ public class ChainReplicationInstance {
     public void addLog(String message) {
         Timestamp timestamp = new Timestamp(System.currentTimeMillis());
         logs.add(timestamp + " " + message);
+        System.out.println(timestamp + " " + message);
     }
 }
 

@@ -51,6 +51,8 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
                     .setNewValue(newValue)
                     .build();
             stub.update(updateRequest);
+            channel.shutdown();
+
         }
     }
 }

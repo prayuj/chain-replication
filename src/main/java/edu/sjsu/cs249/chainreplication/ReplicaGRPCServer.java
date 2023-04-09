@@ -27,22 +27,10 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         responseObserver.onNext(UpdateResponse.newBuilder().build());
         responseObserver.onCompleted();
 
-        /*
-         * TODO:
-         *  1. If tail, ack to your predecessor
-         *  2. else, tell successor of this update */
-
         chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
         if (chainReplicationInstance.isTail) {
             chainReplicationInstance.addLog("I am tail, ack back!");
-            chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
-            chainReplicationInstance.lastProcessedXid = xid;
-            chainReplicationInstance.pendingUpdateRequests.remove(xid);
-            var channel = chainReplicationInstance.createChannel(chainReplicationInstance.predecessorAddress);
-            var stub = ReplicaGrpc.newBlockingStub(channel);
-            var ackRequest = AckRequest.newBuilder()
-                    .setXid(xid).build();
-            stub.ack(ackRequest);
+            chainReplicationInstance.ackXid(xid);
         } else if (chainReplicationInstance.hasSuccessorContacted) {
             var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
             var stub = ReplicaGrpc.newBlockingStub(channel);
@@ -52,6 +40,8 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
                     .setNewValue(newValue)
                     .build();
             stub.update(updateRequest);
+            channel.shutdown();
+
         }
     }
 
@@ -63,6 +53,18 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         int lastXid = request.getLastXid();
         int lastAck = request.getLastAck();
         String znodeName = request.getZnodeName();
+
+        chainReplicationInstance.addLog("request params");
+        chainReplicationInstance.addLog("lastZxidSeen: " + lastZxidSeen +
+                "lastXid: " + lastXid +
+                "lastAck: " + lastAck +
+                "znodeName: " + znodeName);
+
+        if (lastZxidSeen < chainReplicationInstance.lastZxidSeen) {
+            chainReplicationInstance.addLog("replica has older view of zookeeper than me, ignoring request");
+            responseObserver.onNext(NewSuccessorResponse.newBuilder().setRc(-1).build());
+            responseObserver.onCompleted();
+        }
 
         //TODO: add logic for state and update request.
 
@@ -105,9 +107,9 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     public void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
         chainReplicationInstance.addLog("ack grpc called");
         int xid = request.getXid();
+        chainReplicationInstance.addLog("xid: " + xid);
 
-        chainReplicationInstance.lastProcessedXid = xid;
-        chainReplicationInstance.lastAck = xid;
+        chainReplicationInstance.lastAckXid = xid;
         chainReplicationInstance.pendingUpdateRequests.remove(xid);
 
         responseObserver.onNext(AckResponse.newBuilder().build());
@@ -123,6 +125,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             var channel = chainReplicationInstance.createChannel(chainReplicationInstance.predecessorAddress);
             var stub = ReplicaGrpc.newBlockingStub(channel);
             stub.ack(AckRequest.newBuilder().setXid(xid).build());
+            channel.shutdown();
         }
     }
 }

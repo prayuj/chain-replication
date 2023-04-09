@@ -31,6 +31,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
 
     @Override
     public void exit(ExitRequest request, StreamObserver<ExitResponse> responseObserver) {
+        System.out.println("Exiting Program!");
         responseObserver.onNext(ExitResponse.newBuilder().build());
         responseObserver.onCompleted();
         System.exit(0);

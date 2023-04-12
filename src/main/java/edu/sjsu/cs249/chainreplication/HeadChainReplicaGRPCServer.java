@@ -21,14 +21,12 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
         int incrementer = request.getIncValue();
         int newValue;
         if (chainReplicationInstance.replicaState.containsKey(key)) {
-            chainReplicationInstance.addLog("key: " + key + ", " + "oldValue: " + chainReplicationInstance.replicaState.get(key));
             newValue = chainReplicationInstance.replicaState.get(key) + incrementer;
+            chainReplicationInstance.addLog("key: " + key + ", " + "oldValue: " + chainReplicationInstance.replicaState.get(key) + ", " + "newValue: " + newValue);
         } else {
-            chainReplicationInstance.addLog("key: " + key + ", " + "oldValue: " + 0);
             newValue = incrementer;
+            chainReplicationInstance.addLog("key: " + key + ", " + "oldValue: " + 0+ ", " + "newValue: " + newValue);
         }
-
-        chainReplicationInstance.addLog("key: " + key + ", " + "newValue: " + newValue);
         chainReplicationInstance.replicaState.put(key, newValue);
         int xid = ++chainReplicationInstance.lastUpdateRequestXid;
         chainReplicationInstance.addLog("xid generated: " + xid);

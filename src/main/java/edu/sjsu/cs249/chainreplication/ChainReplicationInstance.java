@@ -1,10 +1,7 @@
 package edu.sjsu.cs249.chainreplication;
 
 import edu.sjsu.cs249.chain.*;
-import io.grpc.ManagedChannelBuilder;
-import io.grpc.ManagedChannel;
-import io.grpc.Server;
-import io.grpc.ServerBuilder;
+import io.grpc.*;
 import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.*;
 import org.apache.zookeeper.data.Stat;
@@ -27,10 +24,10 @@ public class ChainReplicationInstance {
     long lastZxidSeen;
     int lastUpdateRequestXid;
     int lastAckXid;
-    String myReplicaName;
+    String myZNodeName;
     String predecessorAddress;
     String successorAddress;
-    String successorReplicaName;
+    String successorZNode;
     boolean hasSuccessorContacted;
     HashMap <Integer, HashTableEntry> pendingUpdateRequests;
     HashMap<Integer, StreamObserver<HeadResponse>> pendingHeadStreamObserver;
@@ -49,7 +46,7 @@ public class ChainReplicationInstance {
         lastUpdateRequestXid = -1;
         lastAckXid = -1;
         successorAddress = "";
-        successorReplicaName = "";
+        successorZNode = "";
         pendingUpdateRequests = new HashMap<>();
         pendingHeadStreamObserver = new HashMap<>();
         replicaState = new HashMap<>();
@@ -58,12 +55,11 @@ public class ChainReplicationInstance {
     }
     void start () throws IOException, InterruptedException, KeeperException {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);
-        String pathName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
-        myReplicaName = pathName.replace(control_path + "/", "");
-        addLog("Created znode name: " + myReplicaName);
+        myZNodeName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+        addLog("Created znode name: " + myZNodeName);
 
         this.getChildrenInPath();
-        this.callPredecessorAndCheckNewSuccessor();
+        this.callPredecessorAndSetSuccessorData();
 
         HeadChainReplicaGRPCServer headChainReplicaGRPCServer = new HeadChainReplicaGRPCServer(this);
         TailChainReplicaGRPCServer tailChainReplicaGRPCServer = new TailChainReplicaGRPCServer(this);
@@ -95,10 +91,9 @@ public class ChainReplicationInstance {
         return watchedEvent -> {
             ChainReplicationInstance.this.addLog("childrenWatcher triggered");
             ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
-            ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
             try {
                 ChainReplicationInstance.this.getChildrenInPath();
-                ChainReplicationInstance.this.callPredecessorAndCheckNewSuccessor();
+                ChainReplicationInstance.this.callPredecessorAndSetSuccessorData();
             } catch (InterruptedException | KeeperException e) {
                 ChainReplicationInstance.this.addLog("Error getting children with getChildrenInPath()");
             }
@@ -124,19 +119,26 @@ public class ChainReplicationInstance {
      Triggers first time on initialize.
      Triggers when there is a change in children path.
      */
-    void callPredecessorAndCheckNewSuccessor() throws InterruptedException, KeeperException {
+    void callPredecessorAndSetSuccessorData() throws InterruptedException, KeeperException {
         List<String> sortedReplicas = replicas.stream().sorted(Comparator.naturalOrder()).toList();
 
+        String myReplicaName = myZNodeName.replace(control_path + "/", "");
         isHead = sortedReplicas.get(0).equals(myReplicaName);
         isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myReplicaName);
         addLog("isHead: " + isHead + ", isTail: " + isTail);
 
+        callPredecessor(sortedReplicas);
+        setSuccessorData(sortedReplicas);
+    }
+
+    void callPredecessor(List<String> sortedReplicas) throws InterruptedException, KeeperException {
         //Don't need to call predecessor if you're head! Reset predecessor values
         if (isHead) {
             predecessorAddress = "";
             return;
         }
 
+        String myReplicaName = myZNodeName.replace(control_path + "/", "");
         int index = sortedReplicas.indexOf(myReplicaName);
         String predecessorReplicaName = sortedReplicas.get(index - 1);
 
@@ -146,68 +148,76 @@ public class ChainReplicationInstance {
         String newPredecessorAddress = data.split("\n")[0];
         String newPredecessorName = data.split("\n")[1];
 
-        // If last predecessor is same as the current one, then don't call!
-        if (newPredecessorAddress.equals(predecessorAddress)) return;
+        // If last predecessor is  not the same as the last one, then call the new one!
+        if (!newPredecessorAddress.equals(predecessorAddress)) {
+            addLog("new predecessor");
+            addLog("newPredecessorAddress: " + newPredecessorAddress);
+            addLog("newPredecessorName: " + newPredecessorName);
 
-        addLog("new predecessor");
-        addLog("newPredecessorAddress: " + newPredecessorAddress);
-        addLog("newPredecessorName: " + newPredecessorName);
+            addLog("calling newSuccessor of new predecessor.");
+            addLog("params:" +
+                    ", lastZxidSeen: " + lastZxidSeen +
+                    ", lastXid: " + lastUpdateRequestXid +
+                    ", lastAck: " + lastAckXid +
+                    ", myReplicaName: " + myZNodeName);
 
-        addLog("calling newSuccessor of new predecessor.");
-        addLog("params:" +
-                ", lastZxidSeen: " + lastZxidSeen +
-                ", lastXid: " + lastUpdateRequestXid +
-                ", lastAck: " + lastAckXid +
-                ", myReplicaName: " + myReplicaName);
+            predecessorAddress = newPredecessorAddress;
+            var channel = this.createChannel(predecessorAddress);
+            var stub = ReplicaGrpc.newBlockingStub(channel);
+            var newSuccessorRequest = NewSuccessorRequest.newBuilder()
+                    .setLastZxidSeen(lastZxidSeen)
+                    .setLastXid(lastUpdateRequestXid)
+                    .setLastAck(lastAckXid)
+                    .setZnodeName(myZNodeName).build();
+            var result = stub.newSuccessor(newSuccessorRequest);
+            channel.shutdown();
 
-        predecessorAddress = newPredecessorAddress;
-        var channel = this.createChannel(predecessorAddress);
-        var stub = ReplicaGrpc.newBlockingStub(channel);
-        var newSuccessorRequest = NewSuccessorRequest.newBuilder()
-                .setLastZxidSeen(lastZxidSeen)
-                .setLastXid(lastUpdateRequestXid)
-                .setLastAck(lastAckXid)
-                .setZnodeName(myReplicaName).build();
-        var result = stub.newSuccessor(newSuccessorRequest);
-        channel.shutdown();
+            long rc = result.getRc();
 
-        int rc = result.getRc();
-
-        addLog("Response received");
-        addLog("rc: " + rc);
-        if (rc == -1) {
-            this.getChildrenInPath();
-            this.callPredecessorAndCheckNewSuccessor();
-        } else if (rc == 0) {
-            lastUpdateRequestXid = result.getLastXid();
-            addLog("lastXid: " + lastUpdateRequestXid);
-            addLog("state value:");
-            for (String key: result.getStateMap().keySet()){
-                replicaState.put(key, result.getStateMap().get(key));
-                addLog(key + ": " + result.getStateMap().get(key));
+            addLog("Response received");
+            addLog("rc: " + rc);
+            if (rc == -1) {
+                this.getChildrenInPath();
+                this.callPredecessorAndSetSuccessorData();
+            } else if (rc == 0) {
+                lastAckXid = result.getLastXid();
+                addLog("lastAckXid: " + lastAckXid);
+                addLog("state value:");
+                for (String key : result.getStateMap().keySet()) {
+                    replicaState.put(key, result.getStateMap().get(key));
+                    addLog(key + ": " + result.getStateMap().get(key));
+                }
+                addPendingUpdateRequests(result);
+            } else {
+                lastAckXid = result.getLastXid();
+                addLog("lastAckXid: " + lastAckXid);
+                addPendingUpdateRequests(result);
             }
-            addPendingUpdateRequests(result);
-        } else {
-            lastUpdateRequestXid = result.getLastXid();
-            addLog("lastXid: " + lastUpdateRequestXid);
-            addPendingUpdateRequests(result);
         }
+    }
 
-        if(isTail) {
-            successorReplicaName = "";
+    void setSuccessorData(List<String> sortedReplicas) {
+        if (isTail) {
+            successorZNode = "";
             successorAddress = "";
             hasSuccessorContacted = false;
             return;
         }
 
-        String newSuccessorReplicaName = sortedReplicas.get(index + 1);
+        String myReplicaName = myZNodeName.replace(control_path + "/" , "");
+        int index = sortedReplicas.indexOf(myReplicaName);
+        String newSuccessorZNode = control_path + "/" + sortedReplicas.get(index + 1);
+
         // If the curr successor replica name matches the new one,
         // then hasSuccessorContacted should be the old value of hasSuccessorContacted
         // else it should be false
-        hasSuccessorContacted = newSuccessorReplicaName.equals(successorReplicaName) && hasSuccessorContacted;
-
+        if (!newSuccessorZNode.equals(successorZNode)) {
+            successorZNode = newSuccessorZNode;
+            hasSuccessorContacted = false;
+            addLog("new successor");
+            addLog("successorZNode: " + successorZNode);
+        }
     }
-
     private void addPendingUpdateRequests(NewSuccessorResponse result) {
         List<UpdateRequest> sent = result.getSentList();
         addLog("sent requests: ");
@@ -219,7 +229,7 @@ public class ChainReplicationInstance {
             addLog("xid: " + xid + ", key: " + key + ", value: " + newValue);
         }
 
-        if (isTail) {
+        if (isTail && pendingUpdateRequests.size() > 0) {
             addLog("I am tail, have to ack back all pending requests!");
             for (int xid: pendingUpdateRequests.keySet()) {
                 ackXid(xid);

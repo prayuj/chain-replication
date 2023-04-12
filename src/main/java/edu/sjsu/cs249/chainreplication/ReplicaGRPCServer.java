@@ -1,9 +1,12 @@
 package edu.sjsu.cs249.chainreplication;
 
+import com.google.rpc.Code;
 import edu.sjsu.cs249.chain.ReplicaGrpc;
 import edu.sjsu.cs249.chain.*;
 import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.KeeperException;
+
+import java.util.Objects;
 
 public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     ChainReplicationInstance chainReplicationInstance;
@@ -56,41 +59,67 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
 
         chainReplicationInstance.addLog("request params");
         chainReplicationInstance.addLog("lastZxidSeen: " + lastZxidSeen +
-                "lastXid: " + lastXid +
-                "lastAck: " + lastAck +
-                "znodeName: " + znodeName);
+                ", lastXid: " + lastXid +
+                ", lastAck: " + lastAck +
+                ", znodeName: " + znodeName);
+        chainReplicationInstance.addLog("my lastZxidSeen: " + chainReplicationInstance.lastZxidSeen);
 
         if (lastZxidSeen < chainReplicationInstance.lastZxidSeen) {
             chainReplicationInstance.addLog("replica has older view of zookeeper than me, ignoring request");
             responseObserver.onNext(NewSuccessorResponse.newBuilder().setRc(-1).build());
             responseObserver.onCompleted();
         }
+        else if (lastZxidSeen == chainReplicationInstance.lastZxidSeen) {
+            chainReplicationInstance.addLog("my successorReplicaName: " + chainReplicationInstance.successorZNode);
+            if (Objects.equals(chainReplicationInstance.successorZNode, znodeName)) {
+                successorProcedure(lastAck, lastXid, znodeName, responseObserver);
+            } else {
+                chainReplicationInstance.addLog("replica is not the replica i saw in my view of zookeeper");
+                responseObserver.onNext(NewSuccessorResponse.newBuilder().setRc(-1).build());
+                responseObserver.onCompleted();
+            }
+        }
+        else if (lastZxidSeen > chainReplicationInstance.lastZxidSeen){
+            chainReplicationInstance.addLog("replica has newer view of zookeeper than me, syncing request");
+            chainReplicationInstance.zk.sync(chainReplicationInstance.control_path, (i, s, o) -> {
+                if (i == Code.OK_VALUE && Objects.equals(chainReplicationInstance.successorZNode, znodeName)) {
+                    successorProcedure(lastAck, lastXid, znodeName, responseObserver);
+                }
+            }, null);
+        }
+    }
 
-        //TODO: add logic for state and update request.
-
+    public void successorProcedure(int lastAck, int lastXid, String znodeName, StreamObserver<NewSuccessorResponse> responseObserver) {
         NewSuccessorResponse.Builder builder = NewSuccessorResponse.newBuilder();
-        builder.setRc(0).setLastXid(chainReplicationInstance.lastUpdateRequestXid).putAllState(chainReplicationInstance.replicaState);
+        builder.setRc(1);
+
+        //If acks mismatch, then some state might be missing
+        if (lastAck != -1) {
+            builder.setRc(0)
+                    .putAllState(chainReplicationInstance.replicaState);
+        }
+
+        //TODO: just send everything
+        for (int xid = lastXid + 1; xid <= chainReplicationInstance.lastUpdateRequestXid; xid += 1) {
+            if (chainReplicationInstance.pendingUpdateRequests.containsKey(xid)) {
+                builder.addSent(UpdateRequest.newBuilder()
+                        .setXid(xid)
+                        .setKey(chainReplicationInstance.pendingUpdateRequests.get(xid).key)
+                        .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(xid).value)
+                        .build());
+            }
+        }
+        builder.setLastXid(chainReplicationInstance.lastAckXid);
 
         chainReplicationInstance.addLog("response values:");
         chainReplicationInstance.addLog(
-                "rc: " + 0 +
-                ", lastXid: " + chainReplicationInstance.lastUpdateRequestXid +
-                ", state: " + chainReplicationInstance.replicaState.toString());
-        chainReplicationInstance.addLog("pending request values:");
-        for(int xid: chainReplicationInstance.pendingUpdateRequests.keySet()) {
-            builder.addSent(UpdateRequest.newBuilder()
-                    .setXid(xid)
-                    .setKey(chainReplicationInstance.pendingUpdateRequests.get(xid).key)
-                    .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(xid).value)
-                    .build());
-            chainReplicationInstance.addLog(
-                    "xid: " + xid +
-                    ", key: " + chainReplicationInstance.pendingUpdateRequests.get(xid).key +
-                    ", value: "+ chainReplicationInstance.pendingUpdateRequests.get(xid).value);
-        }
+                "rc: " + builder.getRc() +
+                        ", lastXid: " + builder.getLastXid() +
+                        ", state: " + builder.getStateMap() +
+                        ", sent: " + builder.getSentList());
+
         try {
-            chainReplicationInstance.successorReplicaName = znodeName;
-            String data = new String(chainReplicationInstance.zk.getData(chainReplicationInstance.control_path + "/" + znodeName, false, null));
+            String data = new String(chainReplicationInstance.zk.getData(znodeName, false, null));
             chainReplicationInstance.successorAddress = data.split("\n")[0];
             chainReplicationInstance.addLog("new successor");
             chainReplicationInstance.addLog("successorAddress: " + chainReplicationInstance.successorAddress);

@@ -119,7 +119,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
                         ", sent: " + builder.getSentList());
 
         try {
-            String data = new String(chainReplicationInstance.zk.getData(znodeName, false, null));
+            String data = new String(chainReplicationInstance.zk.getData(chainReplicationInstance.control_path + "/" + znodeName, false, null));
             chainReplicationInstance.successorAddress = data.split("\n")[0];
             chainReplicationInstance.addLog("new successor");
             chainReplicationInstance.addLog("successorAddress: " + chainReplicationInstance.successorAddress);

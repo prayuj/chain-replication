@@ -55,7 +55,8 @@ public class ChainReplicationInstance {
     }
     void start () throws IOException, InterruptedException, KeeperException {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);
-        myZNodeName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+        String pathName = zk.create(control_path + "/replica-", (grpcHostPort + "\n" + name).getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+        myZNodeName = pathName.replace(control_path + "/", "");
         addLog("Created znode name: " + myZNodeName);
 
         this.getChildrenInPath();
@@ -122,9 +123,8 @@ public class ChainReplicationInstance {
     void callPredecessorAndSetSuccessorData() throws InterruptedException, KeeperException {
         List<String> sortedReplicas = replicas.stream().sorted(Comparator.naturalOrder()).toList();
 
-        String myReplicaName = myZNodeName.replace(control_path + "/", "");
-        isHead = sortedReplicas.get(0).equals(myReplicaName);
-        isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myReplicaName);
+        isHead = sortedReplicas.get(0).equals(myZNodeName);
+        isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myZNodeName);
         addLog("isHead: " + isHead + ", isTail: " + isTail);
 
         callPredecessor(sortedReplicas);
@@ -138,8 +138,7 @@ public class ChainReplicationInstance {
             return;
         }
 
-        String myReplicaName = myZNodeName.replace(control_path + "/", "");
-        int index = sortedReplicas.indexOf(myReplicaName);
+        int index = sortedReplicas.indexOf(myZNodeName);
         String predecessorReplicaName = sortedReplicas.get(index - 1);
 
 //      Don't need to watch, since you're watching the children path, and it will trigger when predecessor goes
@@ -204,9 +203,8 @@ public class ChainReplicationInstance {
             return;
         }
 
-        String myReplicaName = myZNodeName.replace(control_path + "/" , "");
-        int index = sortedReplicas.indexOf(myReplicaName);
-        String newSuccessorZNode = control_path + "/" + sortedReplicas.get(index + 1);
+        int index = sortedReplicas.indexOf(myZNodeName);
+        String newSuccessorZNode = sortedReplicas.get(index + 1);
 
         // If the curr successor replica name matches the new one,
         // then hasSuccessorContacted should be the old value of hasSuccessorContacted

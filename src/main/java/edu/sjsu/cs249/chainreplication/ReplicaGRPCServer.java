@@ -3,6 +3,7 @@ package edu.sjsu.cs249.chainreplication;
 import com.google.rpc.Code;
 import edu.sjsu.cs249.chain.ReplicaGrpc;
 import edu.sjsu.cs249.chain.*;
+import io.grpc.Context;
 import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.KeeperException;
 
@@ -14,78 +15,95 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         this.chainReplicationInstance = chainReplicationInstance;
     }
     @Override
-    public void update(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
-        chainReplicationInstance.addLog("update grpc called");
+    public synchronized void update(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
+        Context ctx = Context.current().fork();
+        ctx.run(() -> {
+            try {
+                chainReplicationInstance.semaphore.acquire();
+                chainReplicationInstance.addLog("update grpc called");
 
-        String key = request.getKey();
-        int newValue = request.getNewValue();
-        int xid = request.getXid();
+                String key = request.getKey();
+                int newValue = request.getNewValue();
+                int xid = request.getXid();
 
-        chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
-        chainReplicationInstance.replicaState.put(key, newValue);
+                chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
+                chainReplicationInstance.replicaState.put(key, newValue);
 
-        chainReplicationInstance.lastUpdateRequestXid = xid;
-        chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+                chainReplicationInstance.lastUpdateRequestXid = xid;
+                chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
 
+                chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
+                if (chainReplicationInstance.isTail) {
+                    chainReplicationInstance.addLog("I am tail, ack back!");
+                    chainReplicationInstance.ackXid(xid);
+                } else if (chainReplicationInstance.hasSuccessorContacted) {
+                    var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
+                    var stub = ReplicaGrpc.newBlockingStub(channel);
+                    var updateRequest = UpdateRequest.newBuilder()
+                            .setXid(xid)
+                            .setKey(key)
+                            .setNewValue(newValue)
+                            .build();
+                    stub.update(updateRequest);
+                    channel.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                chainReplicationInstance.addLog("Problem acquiring semaphore");
+                chainReplicationInstance.addLog(e.getMessage());
+            } finally {
+                chainReplicationInstance.semaphore.release();
+            }
+        });
         responseObserver.onNext(UpdateResponse.newBuilder().build());
         responseObserver.onCompleted();
-
-        chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
-        if (chainReplicationInstance.isTail) {
-            chainReplicationInstance.addLog("I am tail, ack back!");
-            chainReplicationInstance.ackXid(xid);
-        } else if (chainReplicationInstance.hasSuccessorContacted) {
-            var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
-            var stub = ReplicaGrpc.newBlockingStub(channel);
-            var updateRequest = UpdateRequest.newBuilder()
-                    .setXid(xid)
-                    .setKey(key)
-                    .setNewValue(newValue)
-                    .build();
-            stub.update(updateRequest);
-            channel.shutdown();
-
-        }
     }
 
     @Override
-    public void newSuccessor(NewSuccessorRequest request, StreamObserver<NewSuccessorResponse> responseObserver) {
-        chainReplicationInstance.addLog("newSuccessor grpc called");
+    public synchronized void newSuccessor(NewSuccessorRequest request, StreamObserver<NewSuccessorResponse> responseObserver) {
+        try {
+            chainReplicationInstance.semaphore.acquire();
+            chainReplicationInstance.addLog("newSuccessor grpc called");
 
-        long lastZxidSeen = request.getLastZxidSeen();
-        int lastXid = request.getLastXid();
-        int lastAck = request.getLastAck();
-        String znodeName = request.getZnodeName();
+            long lastZxidSeen = request.getLastZxidSeen();
+            int lastXid = request.getLastXid();
+            int lastAck = request.getLastAck();
+            String znodeName = request.getZnodeName();
 
-        chainReplicationInstance.addLog("request params");
-        chainReplicationInstance.addLog("lastZxidSeen: " + lastZxidSeen +
-                ", lastXid: " + lastXid +
-                ", lastAck: " + lastAck +
-                ", znodeName: " + znodeName);
-        chainReplicationInstance.addLog("my lastZxidSeen: " + chainReplicationInstance.lastZxidSeen);
+            chainReplicationInstance.addLog("request params");
+            chainReplicationInstance.addLog("lastZxidSeen: " + lastZxidSeen +
+                    ", lastXid: " + lastXid +
+                    ", lastAck: " + lastAck +
+                    ", znodeName: " + znodeName);
+            chainReplicationInstance.addLog("my lastZxidSeen: " + chainReplicationInstance.lastZxidSeen);
 
-        if (lastZxidSeen < chainReplicationInstance.lastZxidSeen) {
-            chainReplicationInstance.addLog("replica has older view of zookeeper than me, ignoring request");
-            responseObserver.onNext(NewSuccessorResponse.newBuilder().setRc(-1).build());
-            responseObserver.onCompleted();
-        }
-        else if (lastZxidSeen == chainReplicationInstance.lastZxidSeen) {
-            chainReplicationInstance.addLog("my successorReplicaName: " + chainReplicationInstance.successorZNode);
-            if (Objects.equals(chainReplicationInstance.successorZNode, znodeName)) {
-                successorProcedure(lastAck, lastXid, znodeName, responseObserver);
-            } else {
-                chainReplicationInstance.addLog("replica is not the replica i saw in my view of zookeeper");
+            if (lastZxidSeen < chainReplicationInstance.lastZxidSeen) {
+                chainReplicationInstance.addLog("replica has older view of zookeeper than me, ignoring request");
                 responseObserver.onNext(NewSuccessorResponse.newBuilder().setRc(-1).build());
                 responseObserver.onCompleted();
             }
-        }
-        else if (lastZxidSeen > chainReplicationInstance.lastZxidSeen){
-            chainReplicationInstance.addLog("replica has newer view of zookeeper than me, syncing request");
-            chainReplicationInstance.zk.sync(chainReplicationInstance.control_path, (i, s, o) -> {
-                if (i == Code.OK_VALUE && Objects.equals(chainReplicationInstance.successorZNode, znodeName)) {
+            else if (lastZxidSeen == chainReplicationInstance.lastZxidSeen) {
+                chainReplicationInstance.addLog("my successorReplicaName: " + chainReplicationInstance.successorZNode);
+                if (Objects.equals(chainReplicationInstance.successorZNode, znodeName)) {
                     successorProcedure(lastAck, lastXid, znodeName, responseObserver);
+                } else {
+                    chainReplicationInstance.addLog("replica is not the replica i saw in my view of zookeeper");
+                    responseObserver.onNext(NewSuccessorResponse.newBuilder().setRc(-1).build());
+                    responseObserver.onCompleted();
                 }
-            }, null);
+            }
+            else {
+                chainReplicationInstance.addLog("replica has newer view of zookeeper than me, syncing request");
+                chainReplicationInstance.zk.sync(chainReplicationInstance.control_path, (i, s, o) -> {
+                    if (i == Code.OK_VALUE && Objects.equals(chainReplicationInstance.successorZNode, znodeName)) {
+                        successorProcedure(lastAck, lastXid, znodeName, responseObserver);
+                    }
+                }, null);
+            }
+        } catch (InterruptedException e) {
+            chainReplicationInstance.addLog("Problem acquiring semaphore");
+            chainReplicationInstance.addLog(e.getMessage());
+        } finally {
+            chainReplicationInstance.semaphore.release();
         }
     }
 
@@ -99,7 +117,6 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
                     .putAllState(chainReplicationInstance.replicaState);
         }
 
-        //TODO: just send everything
         for (int xid = lastXid + 1; xid <= chainReplicationInstance.lastUpdateRequestXid; xid += 1) {
             if (chainReplicationInstance.pendingUpdateRequests.containsKey(xid)) {
                 builder.addSent(UpdateRequest.newBuilder()
@@ -133,29 +150,35 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     }
 
     @Override
-    public void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
-        chainReplicationInstance.addLog("ack grpc called");
-        int xid = request.getXid();
-        chainReplicationInstance.addLog("xid: " + xid);
+    public synchronized void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
+        Context ctx = Context.current().fork();
+        ctx.run(() -> {
+            try {
+                chainReplicationInstance.semaphore.acquire();
+                chainReplicationInstance.addLog("ack grpc called");
+                int xid = request.getXid();
+                chainReplicationInstance.addLog("xid: " + xid);
 
-        chainReplicationInstance.lastAckXid = xid;
-        chainReplicationInstance.pendingUpdateRequests.remove(xid);
-
+                if (chainReplicationInstance.isHead) {
+                    chainReplicationInstance.lastAckXid = xid;
+                    chainReplicationInstance.pendingUpdateRequests.remove(xid);
+                    chainReplicationInstance.addLog("sending response back to client");
+                    StreamObserver<HeadResponse> headResponseStreamObserver = chainReplicationInstance.pendingHeadStreamObserver.remove(xid);
+                    headResponseStreamObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
+                    headResponseStreamObserver.onCompleted();
+                } else {
+                    chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
+                    chainReplicationInstance.ackXid(xid);
+                }
+            } catch (InterruptedException e) {
+                chainReplicationInstance.addLog("Problem acquiring semaphore");
+                chainReplicationInstance.addLog(e.getMessage());
+            } finally {
+                chainReplicationInstance.semaphore.release();
+            }
+        });
         responseObserver.onNext(AckResponse.newBuilder().build());
         responseObserver.onCompleted();
-
-        if (chainReplicationInstance.isHead) {
-            chainReplicationInstance.addLog("sending response back to client");
-            StreamObserver<HeadResponse> headResponseStreamObserver = chainReplicationInstance.pendingHeadStreamObserver.remove(xid);
-            headResponseStreamObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
-            headResponseStreamObserver.onCompleted();
-        } else {
-            chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
-            var channel = chainReplicationInstance.createChannel(chainReplicationInstance.predecessorAddress);
-            var stub = ReplicaGrpc.newBlockingStub(channel);
-            stub.ack(AckRequest.newBuilder().setXid(xid).build());
-            channel.shutdown();
-        }
     }
 }
 

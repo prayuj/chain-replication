@@ -162,36 +162,53 @@ public class ChainReplicationInstance {
 
             predecessorAddress = newPredecessorAddress;
             var channel = this.createChannel(predecessorAddress);
-            var stub = ReplicaGrpc.newBlockingStub(channel);
+            var stub = ReplicaGrpc.newStub(channel);
             var newSuccessorRequest = NewSuccessorRequest.newBuilder()
                     .setLastZxidSeen(lastZxidSeen)
                     .setLastXid(lastUpdateRequestXid)
                     .setLastAck(lastAckXid)
                     .setZnodeName(myZNodeName).build();
-            var result = stub.newSuccessor(newSuccessorRequest);
-            channel.shutdown();
-
-            long rc = result.getRc();
-
-            addLog("Response received");
-            addLog("rc: " + rc);
-            if (rc == -1) {
-                this.getChildrenInPath();
-                this.callPredecessorAndSetSuccessorData();
-            } else if (rc == 0) {
-                lastAckXid = result.getLastXid();
-                addLog("lastAckXid: " + lastAckXid);
-                addLog("state value:");
-                for (String key : result.getStateMap().keySet()) {
-                    replicaState.put(key, result.getStateMap().get(key));
-                    addLog(key + ": " + result.getStateMap().get(key));
+            StreamObserver<NewSuccessorResponse> responseObserver = new StreamObserver<>() {
+                @Override
+                public void onNext(NewSuccessorResponse newSuccessorResponse) {
+                    long rc = newSuccessorResponse.getRc();
+                    addLog("Response received");
+                    addLog("rc: " + rc);
+                    if (rc == -1) {
+                        try {
+                            getChildrenInPath();
+                            callPredecessorAndSetSuccessorData();
+                        } catch (InterruptedException | KeeperException e) {
+                            addLog("Error getting children with getChildrenInPath()");
+                        }
+                    } else if (rc == 0) {
+                        lastAckXid = newSuccessorResponse.getLastXid();
+                        addLog("lastAckXid: " + lastAckXid);
+                        addLog("state value:");
+                        for (String key : newSuccessorResponse.getStateMap().keySet()) {
+                            replicaState.put(key, newSuccessorResponse.getStateMap().get(key));
+                            addLog(key + ": " + newSuccessorResponse.getStateMap().get(key));
+                        }
+                        addPendingUpdateRequests(newSuccessorResponse);
+                    } else {
+                        lastAckXid = newSuccessorResponse.getLastXid();
+                        addLog("lastAckXid: " + lastAckXid);
+                        addPendingUpdateRequests(newSuccessorResponse);
+                    }
                 }
-                addPendingUpdateRequests(result);
-            } else {
-                lastAckXid = result.getLastXid();
-                addLog("lastAckXid: " + lastAckXid);
-                addPendingUpdateRequests(result);
-            }
+
+                @Override
+                public void onError(Throwable throwable) {
+                    addLog("Error occurred during newSuccessor grpc calls, cause " + throwable.getMessage());
+                    channel.shutdownNow();
+                }
+
+                @Override
+                public void onCompleted() {
+                    channel.shutdownNow();
+                }
+            };
+            stub.newSuccessor(newSuccessorRequest, responseObserver);
         }
     }
 
@@ -241,11 +258,26 @@ public class ChainReplicationInstance {
         pendingUpdateRequests.remove(xid);
         addLog("lastAckXid: " + lastAckXid);
         var channel = this.createChannel(this.predecessorAddress);
-        var stub = ReplicaGrpc.newBlockingStub(channel);
+        var stub = ReplicaGrpc.newStub(channel);
         var ackRequest = AckRequest.newBuilder()
                 .setXid(xid).build();
-        stub.ack(ackRequest);
-        channel.shutdown();
+        stub.ack(ackRequest, new StreamObserver<>() {
+            @Override
+            public void onNext(AckResponse ackResponse) {
+
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+                addLog("Error occurred during ack grpc calls, cause " + throwable.getMessage());
+                channel.shutdownNow();
+            }
+
+            @Override
+            public void onCompleted() {
+                channel.shutdownNow();
+            }
+        });
 
     }
 

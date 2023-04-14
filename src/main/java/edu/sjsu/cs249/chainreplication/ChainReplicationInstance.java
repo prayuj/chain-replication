@@ -35,7 +35,6 @@ public class ChainReplicationInstance {
     HashMap <String, Integer> replicaState;
     List<String> replicas;
     ArrayList <String> logs;
-//    final Semaphore semaphore;
     final Semaphore ackSemaphore;
 
     ChainReplicationInstance(String name, String grpcHostPort, String zookeeper_server_list, String control_path) {
@@ -55,7 +54,6 @@ public class ChainReplicationInstance {
         replicaState = new HashMap<>();
         logs = new ArrayList<>();
         hasSuccessorContacted = false;
-//        semaphore = new Semaphore(1);
         ackSemaphore = new Semaphore(1);
     }
     void start () throws IOException, InterruptedException, KeeperException {
@@ -187,8 +185,8 @@ public class ChainReplicationInstance {
                             addLog("Error getting children with getChildrenInPath()");
                         }
                     } else if (rc == 0) {
-                        lastAckXid = newSuccessorResponse.getLastXid();
-                        addLog("lastAckXid: " + lastAckXid);
+                        lastUpdateRequestXid = newSuccessorResponse.getLastXid();
+                        addLog("lastAckXid: " + lastUpdateRequestXid);
                         addLog("state value:");
                         for (String key : newSuccessorResponse.getStateMap().keySet()) {
                             replicaState.put(key, newSuccessorResponse.getStateMap().get(key));
@@ -196,8 +194,8 @@ public class ChainReplicationInstance {
                         }
                         addPendingUpdateRequests(newSuccessorResponse);
                     } else {
-                        lastAckXid = newSuccessorResponse.getLastXid();
-                        addLog("lastAckXid: " + lastAckXid);
+                        lastUpdateRequestXid = newSuccessorResponse.getLastXid();
+                        addLog("lastXid: " + lastUpdateRequestXid);
                         addPendingUpdateRequests(newSuccessorResponse);
                     }
                 }

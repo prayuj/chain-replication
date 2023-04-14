@@ -22,8 +22,8 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         int xid = request.getXid();
 
         chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
-        chainReplicationInstance.replicaState.put(key, newValue);
 
+        chainReplicationInstance.replicaState.put(key, newValue);
         chainReplicationInstance.lastUpdateRequestXid = xid;
         chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
 
@@ -37,7 +37,6 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         }
         responseObserver.onNext(UpdateResponse.newBuilder().build());
         responseObserver.onCompleted();
-        chainReplicationInstance.addLog("exiting update synchronized block");
     }
 
     @Override
@@ -88,12 +87,13 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         NewSuccessorResponse.Builder builder = NewSuccessorResponse.newBuilder();
         builder.setRc(1);
 
-        //If acks mismatch, then some state might be missing
-        if (lastAck != -1) {
+        //If lastXid is -1, send all state
+        if (lastXid == -1) {
             builder.setRc(0)
-                    .putAllState(chainReplicationInstance.replicaState);
+                .putAllState(chainReplicationInstance.replicaState);
         }
 
+        // send update request starting from their lastXid + 1 till your lastXid
         for (int xid = lastXid + 1; xid <= chainReplicationInstance.lastUpdateRequestXid; xid += 1) {
             if (chainReplicationInstance.pendingUpdateRequests.containsKey(xid)) {
                 builder.addSent(UpdateRequest.newBuilder()
@@ -104,6 +104,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             }
         }
 
+        // ack back request start from your lastAck till their last ack
         for (int myAckXid = chainReplicationInstance.lastAckXid + 1; myAckXid <= lastAck; myAckXid += 1) {
             chainReplicationInstance.ackXid(myAckXid);
         }

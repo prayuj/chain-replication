@@ -39,10 +39,18 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
     @Override
     public void exit(ExitRequest request, StreamObserver<ExitResponse> responseObserver) {
         synchronized (chainReplicationInstance) {
-            System.out.println("Exiting Program!");
-            responseObserver.onNext(ExitResponse.newBuilder().build());
-            responseObserver.onCompleted();
-            System.exit(0);
+            try {
+                chainReplicationInstance.ackSemaphore.acquire();
+                System.out.println("Exiting Program!");
+                responseObserver.onNext(ExitResponse.newBuilder().build());
+                responseObserver.onCompleted();
+                chainReplicationInstance.addLog("releasing semaphore for exit");
+                chainReplicationInstance.ackSemaphore.release();
+                System.exit(0);
+            } catch (InterruptedException e) {
+                chainReplicationInstance.addLog("Problem acquiring semaphore");
+                chainReplicationInstance.addLog(e.getMessage());
+            }
         }
     }
 }

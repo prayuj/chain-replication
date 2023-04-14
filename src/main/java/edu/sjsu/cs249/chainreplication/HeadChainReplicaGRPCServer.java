@@ -38,6 +38,7 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
                 responseObserver.onCompleted();
             } else {
                 chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+                chainReplicationInstance.pendingHeadStreamObserver.put(xid, responseObserver);
 
                 if (!chainReplicationInstance.hasSuccessorContacted) return;
                 chainReplicationInstance.updateSuccessor(key, newValue, xid);

@@ -37,6 +37,9 @@ public class ChainReplicationInstance {
     ArrayList <String> logs;
     final Semaphore ackSemaphore;
 
+    ManagedChannel successorChannel;
+    ManagedChannel predecessorChannel;
+
     ChainReplicationInstance(String name, String grpcHostPort, String zookeeper_server_list, String control_path) {
         this.name = name;
         this.grpcHostPort = grpcHostPort;
@@ -125,18 +128,22 @@ public class ChainReplicationInstance {
      */
     void callPredecessorAndSetSuccessorData() throws InterruptedException, KeeperException {
         List<String> sortedReplicas = replicas.stream().sorted(Comparator.naturalOrder()).toList();
+        synchronized (this) {
+            isHead = sortedReplicas.get(0).equals(myZNodeName);
+            isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myZNodeName);
+            addLog("isHead: " + isHead + ", isTail: " + isTail);
 
-        isHead = sortedReplicas.get(0).equals(myZNodeName);
-        isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myZNodeName);
-        addLog("isHead: " + isHead + ", isTail: " + isTail);
-
-        callPredecessor(sortedReplicas);
-        setSuccessorData(sortedReplicas);
+            callPredecessor(sortedReplicas);
+            setSuccessorData(sortedReplicas);
+        }
     }
 
     void callPredecessor(List<String> sortedReplicas) throws InterruptedException, KeeperException {
         //Don't need to call predecessor if you're head! Reset predecessor values
         if (isHead) {
+            if (predecessorChannel != null) {
+                predecessorChannel.shutdownNow();
+            }
             predecessorAddress = "";
             return;
         }
@@ -144,13 +151,12 @@ public class ChainReplicationInstance {
         int index = sortedReplicas.indexOf(myZNodeName);
         String predecessorReplicaName = sortedReplicas.get(index - 1);
 
-//      Don't need to watch, since you're watching the children path, and it will trigger when predecessor goes
         String data = new String(zk.getData(control_path + "/" + predecessorReplicaName, false, null));
 
         String newPredecessorAddress = data.split("\n")[0];
         String newPredecessorName = data.split("\n")[1];
 
-        // If last predecessor is  not the same as the last one, then call the new one!
+        // If last predecessor is not the same as the last one, then call the new one!
         if (!newPredecessorAddress.equals(predecessorAddress)) {
             addLog("new predecessor");
             addLog("newPredecessorAddress: " + newPredecessorAddress);
@@ -164,59 +170,46 @@ public class ChainReplicationInstance {
                     ", myReplicaName: " + myZNodeName);
 
             predecessorAddress = newPredecessorAddress;
-            var channel = this.createChannel(predecessorAddress);
-            var stub = ReplicaGrpc.newStub(channel);
+            predecessorChannel = this.createChannel(predecessorAddress);
+            var stub = ReplicaGrpc.newBlockingStub(predecessorChannel);
             var newSuccessorRequest = NewSuccessorRequest.newBuilder()
                     .setLastZxidSeen(lastZxidSeen)
                     .setLastXid(lastUpdateRequestXid)
                     .setLastAck(lastAckXid)
                     .setZnodeName(myZNodeName).build();
-            StreamObserver<NewSuccessorResponse> responseObserver = new StreamObserver<>() {
-                @Override
-                public void onNext(NewSuccessorResponse newSuccessorResponse) {
-                    long rc = newSuccessorResponse.getRc();
-                    addLog("Response received");
-                    addLog("rc: " + rc);
-                    if (rc == -1) {
-                        try {
-                            getChildrenInPath();
-                            callPredecessorAndSetSuccessorData();
-                        } catch (InterruptedException | KeeperException e) {
-                            addLog("Error getting children with getChildrenInPath()");
-                        }
-                    } else if (rc == 0) {
-                        lastUpdateRequestXid = newSuccessorResponse.getLastXid();
-                        addLog("lastAckXid: " + lastUpdateRequestXid);
-                        addLog("state value:");
-                        for (String key : newSuccessorResponse.getStateMap().keySet()) {
-                            replicaState.put(key, newSuccessorResponse.getStateMap().get(key));
-                            addLog(key + ": " + newSuccessorResponse.getStateMap().get(key));
-                        }
-                        addPendingUpdateRequests(newSuccessorResponse);
-                    } else {
-                        lastUpdateRequestXid = newSuccessorResponse.getLastXid();
-                        addLog("lastXid: " + lastUpdateRequestXid);
-                        addPendingUpdateRequests(newSuccessorResponse);
-                    }
+            NewSuccessorResponse newSuccessorResponse = stub.newSuccessor(newSuccessorRequest);
+            long rc = newSuccessorResponse.getRc();
+            addLog("Response received");
+            addLog("rc: " + rc);
+            if (rc == -1) {
+                try {
+                    getChildrenInPath();
+                    callPredecessorAndSetSuccessorData();
+                } catch (InterruptedException | KeeperException e) {
+                    addLog("Error getting children with getChildrenInPath()");
                 }
-
-                @Override
-                public void onError(Throwable throwable) {
-                    addLog("Error occurred during newSuccessor grpc calls, cause " + throwable.getMessage());
-                    channel.shutdownNow();
+            } else if (rc == 0) {
+                lastUpdateRequestXid = newSuccessorResponse.getLastXid();
+                addLog("lastUpdateRequestXid: " + lastUpdateRequestXid);
+                addLog("state value:");
+                for (String key : newSuccessorResponse.getStateMap().keySet()) {
+                    replicaState.put(key, newSuccessorResponse.getStateMap().get(key));
+                    addLog(key + ": " + newSuccessorResponse.getStateMap().get(key));
                 }
-
-                @Override
-                public void onCompleted() {
-                    channel.shutdownNow();
-                }
-            };
-            stub.newSuccessor(newSuccessorRequest, responseObserver);
+                addPendingUpdateRequests(newSuccessorResponse);
+            } else {
+                lastUpdateRequestXid = newSuccessorResponse.getLastXid();
+                addLog("lastUpdateRequestXid: " + lastUpdateRequestXid);
+                addPendingUpdateRequests(newSuccessorResponse);
+            }
         }
     }
 
     void setSuccessorData(List<String> sortedReplicas) {
         if (isTail) {
+            if (successorChannel != null) {
+                successorChannel.shutdownNow();
+            }
             successorZNode = "";
             successorAddress = "";
             hasSuccessorContacted = false;
@@ -260,8 +253,7 @@ public class ChainReplicationInstance {
         lastAckXid = xid;
         pendingUpdateRequests.remove(xid);
         addLog("lastAckXid: " + lastAckXid);
-        var channel = createChannel(predecessorAddress);
-        var stub = ReplicaGrpc.newBlockingStub(channel);
+        var stub = ReplicaGrpc.newBlockingStub(predecessorChannel);
         var ackRequest = AckRequest.newBuilder()
                 .setXid(xid).build();
         stub.ack(ackRequest/*, new StreamObserver<>() {
@@ -281,7 +273,6 @@ public class ChainReplicationInstance {
                 channel.shutdownNow();
             }
         }*/);
-        channel.shutdownNow();
     }
 
     public void updateSuccessor(String key, int newValue, int xid) {
@@ -291,15 +282,13 @@ public class ChainReplicationInstance {
                     ", xid: " + xid +
                     ", key: " + key +
                     ", newValue: " + newValue);
-            var channel = createChannel(successorAddress);
-            var stub = ReplicaGrpc.newBlockingStub(channel);
+            var stub = ReplicaGrpc.newBlockingStub(successorChannel);
             var updateRequest = UpdateRequest.newBuilder()
                     .setXid(xid)
                     .setKey(key)
                     .setNewValue(newValue)
                     .build();
             stub.update(updateRequest);
-            channel.shutdownNow();
         }
     }
 

@@ -9,23 +9,18 @@ import org.apache.zookeeper.KeeperException;
 import java.util.Objects;
 
 public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
-    ChainReplicationInstance chainReplicationInstance;
+    final ChainReplicationInstance chainReplicationInstance;
     ReplicaGRPCServer(ChainReplicationInstance chainReplicationInstance){
         this.chainReplicationInstance = chainReplicationInstance;
     }
     @Override
     public void update(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
-        try {
-            chainReplicationInstance.addLog("trying to acquire semaphore in update");
-            chainReplicationInstance.semaphore.acquire();
+        synchronized (chainReplicationInstance) {
             chainReplicationInstance.addLog("update grpc called");
 
             String key = request.getKey();
             int newValue = request.getNewValue();
             int xid = request.getXid();
-
-            responseObserver.onNext(UpdateResponse.newBuilder().build());
-            responseObserver.onCompleted();
 
             chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
             chainReplicationInstance.replicaState.put(key, newValue);
@@ -34,39 +29,22 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
 
             chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
+
             if (chainReplicationInstance.isTail) {
                 chainReplicationInstance.addLog("I am tail, ack back!");
                 chainReplicationInstance.ackXid(xid);
             } else if (chainReplicationInstance.hasSuccessorContacted) {
-                chainReplicationInstance.addLog("making update call to successor: " + chainReplicationInstance.successorAddress);
-                chainReplicationInstance.addLog("params:" +
-                        ", xid: " + xid +
-                        ", key: " + key +
-                        ", newValue: " + newValue);
-                var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
-                var stub = ReplicaGrpc.newBlockingStub(channel);
-                var updateRequest = UpdateRequest.newBuilder()
-                        .setXid(xid)
-                        .setKey(key)
-                        .setNewValue(newValue)
-                        .build();
-                stub.update(updateRequest);
-                channel.shutdownNow();
+                chainReplicationInstance.updateSuccessor(key, newValue, xid);
             }
-        } catch (InterruptedException e) {
-            chainReplicationInstance.addLog("Problem acquiring semaphore");
-            chainReplicationInstance.addLog(e.getMessage());
-        } finally {
-            chainReplicationInstance.addLog("releasing semaphore for update");
-            chainReplicationInstance.semaphore.release();
+            responseObserver.onNext(UpdateResponse.newBuilder().build());
+            responseObserver.onCompleted();
+            chainReplicationInstance.addLog("exiting update synchronized block");
         }
     }
 
     @Override
-    public synchronized void newSuccessor(NewSuccessorRequest request, StreamObserver<NewSuccessorResponse> responseObserver) {
-        try {
-            chainReplicationInstance.addLog("trying to acquire semaphore in newSuccessor");
-            chainReplicationInstance.semaphore.acquire();
+    public void newSuccessor(NewSuccessorRequest request, StreamObserver<NewSuccessorResponse> responseObserver) {
+        synchronized (chainReplicationInstance) {
             chainReplicationInstance.addLog("newSuccessor grpc called");
 
             long lastZxidSeen = request.getLastZxidSeen();
@@ -104,12 +82,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
                     }
                 }, null);
             }
-        } catch (InterruptedException e) {
-            chainReplicationInstance.addLog("Problem acquiring semaphore");
-            chainReplicationInstance.addLog(e.getMessage());
-        } finally {
-            chainReplicationInstance.addLog("releasing semaphore for newSuccessor");
-            chainReplicationInstance.semaphore.release();
+            chainReplicationInstance.addLog("exiting newSuccessor synchronized block");
         }
     }
 
@@ -168,9 +141,6 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             chainReplicationInstance.addLog("ack grpc called");
             int xid = request.getXid();
 
-            responseObserver.onNext(AckResponse.newBuilder().build());
-            responseObserver.onCompleted();
-
             chainReplicationInstance.addLog("xid: " + xid);
 
             if (chainReplicationInstance.isHead) {
@@ -181,9 +151,10 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
                 headResponseStreamObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
                 headResponseStreamObserver.onCompleted();
             } else {
-                chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
                 chainReplicationInstance.ackXid(xid);
             }
+            responseObserver.onNext(AckResponse.newBuilder().build());
+            responseObserver.onCompleted();
         } catch (InterruptedException e) {
             chainReplicationInstance.addLog("Problem acquiring semaphore");
             chainReplicationInstance.addLog(e.getMessage());

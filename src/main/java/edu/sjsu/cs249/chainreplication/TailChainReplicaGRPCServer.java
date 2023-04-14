@@ -4,15 +4,13 @@ import edu.sjsu.cs249.chain.*;
 import io.grpc.stub.StreamObserver;
 
 public class TailChainReplicaGRPCServer extends TailChainReplicaGrpc.TailChainReplicaImplBase {
-    ChainReplicationInstance chainReplicationInstance;
+    final ChainReplicationInstance chainReplicationInstance;
     TailChainReplicaGRPCServer(ChainReplicationInstance chainReplicationInstance){
         this.chainReplicationInstance = chainReplicationInstance;
     }
     @Override
-    public synchronized void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
-        try {
-            chainReplicationInstance.addLog("trying to acquire semaphore in get");
-            chainReplicationInstance.semaphore.acquire();
+    public void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
+        synchronized (chainReplicationInstance) {
             chainReplicationInstance.addLog("get grpc called");
             if (!chainReplicationInstance.isTail) {
                 responseObserver.onNext(GetResponse.newBuilder().setRc(1).build());
@@ -23,12 +21,7 @@ public class TailChainReplicaGRPCServer extends TailChainReplicaGrpc.TailChainRe
             int value = chainReplicationInstance.replicaState.getOrDefault(key, 0);
             responseObserver.onNext(GetResponse.newBuilder().setValue(value).setRc(0).build());
             responseObserver.onCompleted();
-        } catch (InterruptedException e) {
-            chainReplicationInstance.addLog("Problem acquiring semaphore");
-            chainReplicationInstance.addLog(e.getMessage());
-        } finally {
-            chainReplicationInstance.addLog("releasing semaphore for get");
-            chainReplicationInstance.semaphore.release();
+            chainReplicationInstance.addLog("exiting get synchronized block");
         }
     }
 }

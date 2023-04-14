@@ -35,7 +35,7 @@ public class ChainReplicationInstance {
     HashMap <String, Integer> replicaState;
     List<String> replicas;
     ArrayList <String> logs;
-    final Semaphore semaphore;
+//    final Semaphore semaphore;
     final Semaphore ackSemaphore;
 
     ChainReplicationInstance(String name, String grpcHostPort, String zookeeper_server_list, String control_path) {
@@ -55,7 +55,7 @@ public class ChainReplicationInstance {
         replicaState = new HashMap<>();
         logs = new ArrayList<>();
         hasSuccessorContacted = false;
-        semaphore = new Semaphore(1);
+//        semaphore = new Semaphore(1);
         ackSemaphore = new Semaphore(1);
     }
     void start () throws IOException, InterruptedException, KeeperException {
@@ -262,7 +262,7 @@ public class ChainReplicationInstance {
         lastAckXid = xid;
         pendingUpdateRequests.remove(xid);
         addLog("lastAckXid: " + lastAckXid);
-        var channel = this.createChannel(this.predecessorAddress);
+        var channel = createChannel(predecessorAddress);
         var stub = ReplicaGrpc.newBlockingStub(channel);
         var ackRequest = AckRequest.newBuilder()
                 .setXid(xid).build();
@@ -284,7 +284,25 @@ public class ChainReplicationInstance {
             }
         }*/);
         channel.shutdownNow();
+    }
 
+    public void updateSuccessor(String key, int newValue, int xid) {
+        synchronized (this) {
+            addLog("making update call to successor: " + successorAddress);
+            addLog("params:" +
+                    ", xid: " + xid +
+                    ", key: " + key +
+                    ", newValue: " + newValue);
+            var channel = createChannel(successorAddress);
+            var stub = ReplicaGrpc.newBlockingStub(channel);
+            var updateRequest = UpdateRequest.newBuilder()
+                    .setXid(xid)
+                    .setKey(key)
+                    .setNewValue(newValue)
+                    .build();
+            stub.update(updateRequest);
+            channel.shutdownNow();
+        }
     }
 
     public ManagedChannel createChannel(String serverAddress){

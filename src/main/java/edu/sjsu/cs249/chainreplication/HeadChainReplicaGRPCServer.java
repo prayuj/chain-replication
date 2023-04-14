@@ -4,15 +4,13 @@ import edu.sjsu.cs249.chain.*;
 import io.grpc.stub.StreamObserver;
 
 public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainReplicaImplBase   {
-    ChainReplicationInstance chainReplicationInstance;
+    final ChainReplicationInstance chainReplicationInstance;
     HeadChainReplicaGRPCServer(ChainReplicationInstance chainReplicationInstance){
         this.chainReplicationInstance = chainReplicationInstance;
     }
     @Override
-    public synchronized void increment(IncRequest request, StreamObserver<HeadResponse> responseObserver) {
-        try {
-            chainReplicationInstance.addLog("trying to acquire semaphore in increment");
-            chainReplicationInstance.semaphore.acquire();
+    public void increment(IncRequest request, StreamObserver<HeadResponse> responseObserver) {
+        synchronized (chainReplicationInstance) {
             chainReplicationInstance.addLog("increment grpc called");
             if (!chainReplicationInstance.isHead) {
                 chainReplicationInstance.addLog("not head, cannot update");
@@ -43,28 +41,9 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
                 chainReplicationInstance.pendingHeadStreamObserver.put(xid, responseObserver);
 
                 if (!chainReplicationInstance.hasSuccessorContacted) return;
-                chainReplicationInstance.addLog("making update call to successor: " + chainReplicationInstance.successorAddress);
-                chainReplicationInstance.addLog("params:" +
-                        ", xid: " + xid +
-                        ", key: " + key +
-                        ", newValue: " + newValue);
-                var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
-                var stub = ReplicaGrpc.newBlockingStub(channel);
-                var updateRequest = UpdateRequest.newBuilder()
-                        .setXid(xid)
-                        .setKey(key)
-                        .setNewValue(newValue)
-                        .build();
-                stub.update(updateRequest);
-                channel.shutdownNow();
+                chainReplicationInstance.updateSuccessor(key, newValue, xid);
             }
-
-        } catch (InterruptedException e) {
-            chainReplicationInstance.addLog("Problem acquiring semaphore");
-            chainReplicationInstance.addLog(e.getMessage());
-        } finally {
-            chainReplicationInstance.addLog("releasing semaphore for increment");
-            chainReplicationInstance.semaphore.release();
+            chainReplicationInstance.addLog("exiting increment synchronized block");
         }
     }
 }

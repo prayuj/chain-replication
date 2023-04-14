@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 
 public class ChainReplicationInstance {
     String name;
@@ -34,6 +35,8 @@ public class ChainReplicationInstance {
     HashMap <String, Integer> replicaState;
     List<String> replicas;
     ArrayList <String> logs;
+    final Semaphore semaphore;
+    final Semaphore ackSemaphore;
 
     ChainReplicationInstance(String name, String grpcHostPort, String zookeeper_server_list, String control_path) {
         this.name = name;
@@ -52,6 +55,8 @@ public class ChainReplicationInstance {
         replicaState = new HashMap<>();
         logs = new ArrayList<>();
         hasSuccessorContacted = false;
+        semaphore = new Semaphore(1);
+        ackSemaphore = new Semaphore(1);
     }
     void start () throws IOException, InterruptedException, KeeperException {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);
@@ -258,10 +263,10 @@ public class ChainReplicationInstance {
         pendingUpdateRequests.remove(xid);
         addLog("lastAckXid: " + lastAckXid);
         var channel = this.createChannel(this.predecessorAddress);
-        var stub = ReplicaGrpc.newStub(channel);
+        var stub = ReplicaGrpc.newBlockingStub(channel);
         var ackRequest = AckRequest.newBuilder()
                 .setXid(xid).build();
-        stub.ack(ackRequest, new StreamObserver<>() {
+        stub.ack(ackRequest/*, new StreamObserver<>() {
             @Override
             public void onNext(AckResponse ackResponse) {
 
@@ -277,7 +282,8 @@ public class ChainReplicationInstance {
             public void onCompleted() {
                 channel.shutdownNow();
             }
-        });
+        }*/);
+        channel.shutdownNow();
 
     }
 

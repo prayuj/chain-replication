@@ -1,7 +1,6 @@
 package edu.sjsu.cs249.chainreplication;
 
 import edu.sjsu.cs249.chain.*;
-import edu.sjsu.cs249.chainreplication.*;
 import io.grpc.stub.StreamObserver;
 
 public class TailChainReplicaGRPCServer extends TailChainReplicaGrpc.TailChainReplicaImplBase {
@@ -12,6 +11,7 @@ public class TailChainReplicaGRPCServer extends TailChainReplicaGrpc.TailChainRe
     @Override
     public synchronized void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
         try {
+            chainReplicationInstance.addLog("trying to acquire semaphore in get");
             chainReplicationInstance.semaphore.acquire();
             chainReplicationInstance.addLog("get grpc called");
             if (!chainReplicationInstance.isTail) {
@@ -27,11 +27,8 @@ public class TailChainReplicaGRPCServer extends TailChainReplicaGrpc.TailChainRe
             chainReplicationInstance.addLog("Problem acquiring semaphore");
             chainReplicationInstance.addLog(e.getMessage());
         } finally {
+            chainReplicationInstance.addLog("releasing semaphore for get");
             chainReplicationInstance.semaphore.release();
         }
-        String key = request.getKey();
-        int value = chainReplicationInstance.replicaState.getOrDefault(key, 0);
-        responseObserver.onNext(GetResponse.newBuilder().setValue(value).setRc(0).build());
-        responseObserver.onCompleted();
     }
 }

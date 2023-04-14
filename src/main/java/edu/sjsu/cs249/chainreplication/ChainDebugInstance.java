@@ -13,6 +13,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
     @Override
     public synchronized void debug(ChainDebugRequest request, StreamObserver<ChainDebugResponse> responseObserver) {
         try {
+            chainReplicationInstance.addLog("trying to acquire semaphore in debug");
             chainReplicationInstance.semaphore.acquire();
             chainReplicationInstance.addLog("debug rpc called");
             ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
@@ -34,6 +35,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
             chainReplicationInstance.addLog("Problem acquiring semaphore");
             chainReplicationInstance.addLog(e.getMessage());
         } finally {
+            chainReplicationInstance.addLog("releasing semaphore for debug");
             chainReplicationInstance.semaphore.release();
         }
     }
@@ -41,6 +43,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
     @Override
     public void exit(ExitRequest request, StreamObserver<ExitResponse> responseObserver) {
         try {
+            chainReplicationInstance.addLog("trying to acquire semaphore in exit");
             chainReplicationInstance.semaphore.acquire();
             System.out.println("Exiting Program!");
             responseObserver.onNext(ExitResponse.newBuilder().build());
@@ -50,6 +53,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
             chainReplicationInstance.addLog("Problem acquiring semaphore");
             chainReplicationInstance.addLog(e.getMessage());
         } finally {
+            chainReplicationInstance.addLog("releasing semaphore for exit");
             chainReplicationInstance.semaphore.release();
         }
     }

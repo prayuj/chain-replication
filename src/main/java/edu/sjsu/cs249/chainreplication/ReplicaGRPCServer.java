@@ -3,7 +3,6 @@ package edu.sjsu.cs249.chainreplication;
 import com.google.rpc.Code;
 import edu.sjsu.cs249.chain.ReplicaGrpc;
 import edu.sjsu.cs249.chain.*;
-import io.grpc.Context;
 import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.KeeperException;
 
@@ -15,52 +14,58 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         this.chainReplicationInstance = chainReplicationInstance;
     }
     @Override
-    public synchronized void update(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
-        Context ctx = Context.current().fork();
-        ctx.run(() -> {
-            try {
-                chainReplicationInstance.semaphore.acquire();
-                chainReplicationInstance.addLog("update grpc called");
+    public void update(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
+        try {
+            chainReplicationInstance.addLog("trying to acquire semaphore in update");
+            chainReplicationInstance.semaphore.acquire();
+            chainReplicationInstance.addLog("update grpc called");
 
-                String key = request.getKey();
-                int newValue = request.getNewValue();
-                int xid = request.getXid();
+            String key = request.getKey();
+            int newValue = request.getNewValue();
+            int xid = request.getXid();
 
-                chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
-                chainReplicationInstance.replicaState.put(key, newValue);
+            responseObserver.onNext(UpdateResponse.newBuilder().build());
+            responseObserver.onCompleted();
 
-                chainReplicationInstance.lastUpdateRequestXid = xid;
-                chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+            chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
+            chainReplicationInstance.replicaState.put(key, newValue);
 
-                chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
-                if (chainReplicationInstance.isTail) {
-                    chainReplicationInstance.addLog("I am tail, ack back!");
-                    chainReplicationInstance.ackXid(xid);
-                } else if (chainReplicationInstance.hasSuccessorContacted) {
-                    var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
-                    var stub = ReplicaGrpc.newBlockingStub(channel);
-                    var updateRequest = UpdateRequest.newBuilder()
-                            .setXid(xid)
-                            .setKey(key)
-                            .setNewValue(newValue)
-                            .build();
-                    stub.update(updateRequest);
-                    channel.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                chainReplicationInstance.addLog("Problem acquiring semaphore");
-                chainReplicationInstance.addLog(e.getMessage());
-            } finally {
-                chainReplicationInstance.semaphore.release();
+            chainReplicationInstance.lastUpdateRequestXid = xid;
+            chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+
+            chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
+            if (chainReplicationInstance.isTail) {
+                chainReplicationInstance.addLog("I am tail, ack back!");
+                chainReplicationInstance.ackXid(xid);
+            } else if (chainReplicationInstance.hasSuccessorContacted) {
+                chainReplicationInstance.addLog("making update call to successor: " + chainReplicationInstance.successorAddress);
+                chainReplicationInstance.addLog("params:" +
+                        ", xid: " + xid +
+                        ", key: " + key +
+                        ", newValue: " + newValue);
+                var channel = chainReplicationInstance.createChannel(chainReplicationInstance.successorAddress);
+                var stub = ReplicaGrpc.newBlockingStub(channel);
+                var updateRequest = UpdateRequest.newBuilder()
+                        .setXid(xid)
+                        .setKey(key)
+                        .setNewValue(newValue)
+                        .build();
+                stub.update(updateRequest);
+                channel.shutdownNow();
             }
-        });
-        responseObserver.onNext(UpdateResponse.newBuilder().build());
-        responseObserver.onCompleted();
+        } catch (InterruptedException e) {
+            chainReplicationInstance.addLog("Problem acquiring semaphore");
+            chainReplicationInstance.addLog(e.getMessage());
+        } finally {
+            chainReplicationInstance.addLog("releasing semaphore for update");
+            chainReplicationInstance.semaphore.release();
+        }
     }
 
     @Override
     public synchronized void newSuccessor(NewSuccessorRequest request, StreamObserver<NewSuccessorResponse> responseObserver) {
         try {
+            chainReplicationInstance.addLog("trying to acquire semaphore in newSuccessor");
             chainReplicationInstance.semaphore.acquire();
             chainReplicationInstance.addLog("newSuccessor grpc called");
 
@@ -103,6 +108,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             chainReplicationInstance.addLog("Problem acquiring semaphore");
             chainReplicationInstance.addLog(e.getMessage());
         } finally {
+            chainReplicationInstance.addLog("releasing semaphore for newSuccessor");
             chainReplicationInstance.semaphore.release();
         }
     }
@@ -126,6 +132,11 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
                         .build());
             }
         }
+
+        for (int myAckXid = chainReplicationInstance.lastAckXid + 1; myAckXid <= lastAck; myAckXid += 1) {
+            chainReplicationInstance.ackXid(myAckXid);
+        }
+
         builder.setLastXid(chainReplicationInstance.lastAckXid);
 
         chainReplicationInstance.addLog("response values:");
@@ -150,35 +161,36 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     }
 
     @Override
-    public synchronized void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
-        Context ctx = Context.current().fork();
-        ctx.run(() -> {
-            try {
-                chainReplicationInstance.semaphore.acquire();
-                chainReplicationInstance.addLog("ack grpc called");
-                int xid = request.getXid();
-                chainReplicationInstance.addLog("xid: " + xid);
+    public void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
+        try {
+            chainReplicationInstance.addLog("trying to acquire semaphore in ack");
+            chainReplicationInstance.ackSemaphore.acquire();
+            chainReplicationInstance.addLog("ack grpc called");
+            int xid = request.getXid();
 
-                if (chainReplicationInstance.isHead) {
-                    chainReplicationInstance.lastAckXid = xid;
-                    chainReplicationInstance.pendingUpdateRequests.remove(xid);
-                    chainReplicationInstance.addLog("sending response back to client");
-                    StreamObserver<HeadResponse> headResponseStreamObserver = chainReplicationInstance.pendingHeadStreamObserver.remove(xid);
-                    headResponseStreamObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
-                    headResponseStreamObserver.onCompleted();
-                } else {
-                    chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
-                    chainReplicationInstance.ackXid(xid);
-                }
-            } catch (InterruptedException e) {
-                chainReplicationInstance.addLog("Problem acquiring semaphore");
-                chainReplicationInstance.addLog(e.getMessage());
-            } finally {
-                chainReplicationInstance.semaphore.release();
+            responseObserver.onNext(AckResponse.newBuilder().build());
+            responseObserver.onCompleted();
+
+            chainReplicationInstance.addLog("xid: " + xid);
+
+            if (chainReplicationInstance.isHead) {
+                chainReplicationInstance.lastAckXid = xid;
+                chainReplicationInstance.pendingUpdateRequests.remove(xid);
+                chainReplicationInstance.addLog("sending response back to client");
+                StreamObserver<HeadResponse> headResponseStreamObserver = chainReplicationInstance.pendingHeadStreamObserver.remove(xid);
+                headResponseStreamObserver.onNext(HeadResponse.newBuilder().setRc(0).build());
+                headResponseStreamObserver.onCompleted();
+            } else {
+                chainReplicationInstance.addLog("calling ack method of predecessor: " + chainReplicationInstance.predecessorAddress);
+                chainReplicationInstance.ackXid(xid);
             }
-        });
-        responseObserver.onNext(AckResponse.newBuilder().build());
-        responseObserver.onCompleted();
+        } catch (InterruptedException e) {
+            chainReplicationInstance.addLog("Problem acquiring semaphore");
+            chainReplicationInstance.addLog(e.getMessage());
+        } finally {
+            chainReplicationInstance.addLog("releasing semaphore for ack");
+            chainReplicationInstance.ackSemaphore.release();
+        }
     }
 }
 

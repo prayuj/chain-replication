@@ -11,6 +11,7 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
     @Override
     public synchronized void increment(IncRequest request, StreamObserver<HeadResponse> responseObserver) {
         try {
+            chainReplicationInstance.addLog("trying to acquire semaphore in increment");
             chainReplicationInstance.semaphore.acquire();
             chainReplicationInstance.addLog("increment grpc called");
             if (!chainReplicationInstance.isHead) {
@@ -62,6 +63,7 @@ public class HeadChainReplicaGRPCServer extends HeadChainReplicaGrpc.HeadChainRe
             chainReplicationInstance.addLog("Problem acquiring semaphore");
             chainReplicationInstance.addLog(e.getMessage());
         } finally {
+            chainReplicationInstance.addLog("releasing semaphore for increment");
             chainReplicationInstance.semaphore.release();
         }
     }

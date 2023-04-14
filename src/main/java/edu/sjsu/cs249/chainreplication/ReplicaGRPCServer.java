@@ -15,31 +15,29 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     }
     @Override
     public void update(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
-        synchronized (chainReplicationInstance) {
-            chainReplicationInstance.addLog("update grpc called");
+        chainReplicationInstance.addLog("update grpc called");
 
-            String key = request.getKey();
-            int newValue = request.getNewValue();
-            int xid = request.getXid();
+        String key = request.getKey();
+        int newValue = request.getNewValue();
+        int xid = request.getXid();
 
-            chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
-            chainReplicationInstance.replicaState.put(key, newValue);
+        chainReplicationInstance.addLog("xid: " + xid + ", key: " + key + ", newValue: " + newValue);
+        chainReplicationInstance.replicaState.put(key, newValue);
 
-            chainReplicationInstance.lastUpdateRequestXid = xid;
-            chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
+        chainReplicationInstance.lastUpdateRequestXid = xid;
+        chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
 
-            chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
+        chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
 
-            if (chainReplicationInstance.isTail) {
-                chainReplicationInstance.addLog("I am tail, ack back!");
-                chainReplicationInstance.ackXid(xid);
-            } else if (chainReplicationInstance.hasSuccessorContacted) {
-                chainReplicationInstance.updateSuccessor(key, newValue, xid);
-            }
-            responseObserver.onNext(UpdateResponse.newBuilder().build());
-            responseObserver.onCompleted();
-            chainReplicationInstance.addLog("exiting update synchronized block");
+        if (chainReplicationInstance.isTail) {
+            chainReplicationInstance.addLog("I am tail, ack back!");
+            chainReplicationInstance.ackXid(xid);
+        } else if (chainReplicationInstance.hasSuccessorContacted) {
+            chainReplicationInstance.updateSuccessor(key, newValue, xid);
         }
+        responseObserver.onNext(UpdateResponse.newBuilder().build());
+        responseObserver.onCompleted();
+        chainReplicationInstance.addLog("exiting update synchronized block");
     }
 
     @Override

@@ -58,6 +58,14 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
             responseObserver.onNext(ExitResponse.newBuilder().build());
             responseObserver.onCompleted();
             chainReplicationInstance.addLog("releasing semaphore for exit");
+            while (!chainReplicationInstance.successorQueue.isEmpty() || !chainReplicationInstance.predecessorQueue.isEmpty()) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    // Handle InterruptedException
+                }
+            }
             System.exit(0);
         }
     }

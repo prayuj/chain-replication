@@ -40,6 +40,8 @@ public class ChainReplicationInstance {
 
     ManagedChannel successorChannel;
     ManagedChannel predecessorChannel;
+    QueueableRequest<UpdateRequest> successorQueue;
+    QueueableRequest<AckRequest> predecessorQueue;
 
     ChainReplicationInstance(String name, String grpcHostPort, String zookeeper_server_list, String control_path) {
         this.name = name;
@@ -239,13 +241,6 @@ public class ChainReplicationInstance {
             pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
             addLog("xid: " + xid + ", key: " + key + ", value: " + newValue);
         }
-
-        if (isTail && pendingUpdateRequests.size() > 0) {
-            addLog("I am tail, have to ack back all pending requests!");
-            for (int xid: pendingUpdateRequests.keySet()) {
-                ackPredecessor(xid);
-            }
-        }
     }
 
     public void ackPredecessor(int xid) {
@@ -253,35 +248,23 @@ public class ChainReplicationInstance {
         lastAckXid = xid;
         pendingUpdateRequests.remove(xid);
         addLog("lastAckXid: " + lastAckXid);
-        var stub = ReplicaGrpc.newBlockingStub(predecessorChannel).withDeadlineAfter(5L, TimeUnit.SECONDS);;
         var ackRequest = AckRequest.newBuilder()
                 .setXid(xid).build();
-        try {
-            stub.ack(ackRequest);
-        } catch (io.grpc.StatusRuntimeException rE) {
-            addLog("error while executing gRPC in ackXid");
-        }
+        predecessorQueue.submitRequest(ackRequest);
     }
 
     public void updateSuccessor(String key, int newValue, int xid) {
-        synchronized (this) {
-            addLog("making update call to successor: " + successorAddress);
-            addLog("params:" +
-                    ", xid: " + xid +
-                    ", key: " + key +
-                    ", newValue: " + newValue);
-            var stub = ReplicaGrpc.newBlockingStub(successorChannel).withDeadlineAfter(5L, TimeUnit.SECONDS);
-            var updateRequest = UpdateRequest.newBuilder()
-                    .setXid(xid)
-                    .setKey(key)
-                    .setNewValue(newValue)
-                    .build();
-            try {
-                stub.update(updateRequest);
-            } catch (io.grpc.StatusRuntimeException rE) {
-                addLog("error while executing gRPC in updateSuccessor");
-            }
-        }
+        addLog("making update call to successor: " + successorAddress);
+        addLog("params:" +
+                ", xid: " + xid +
+                ", key: " + key +
+                ", newValue: " + newValue);
+        var updateRequest = UpdateRequest.newBuilder()
+                .setXid(xid)
+                .setKey(key)
+                .setNewValue(newValue)
+                .build();
+        successorQueue.submitRequest(updateRequest);
     }
 
     public ManagedChannel createChannel(String serverAddress){

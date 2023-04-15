@@ -54,19 +54,11 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
 
         //synchronize and acquire ack semaphore to allow all pending requests to complete before you exit
         synchronized (chainReplicationInstance) {
-            try {
-                chainReplicationInstance.ackSemaphore.acquire();
-                System.out.println("Exiting Program!");
-                responseObserver.onNext(ExitResponse.newBuilder().build());
-                responseObserver.onCompleted();
-                chainReplicationInstance.addLog("releasing semaphore for exit");
-                chainReplicationInstance.ackSemaphore.release();
-                System.exit(0);
-            } catch (InterruptedException e) {
-                chainReplicationInstance.addLog("Problem acquiring semaphore");
-                chainReplicationInstance.addLog(e.getMessage());
-                System.exit(0);
-            }
+            System.out.println("Exiting Program!");
+            responseObserver.onNext(ExitResponse.newBuilder().build());
+            responseObserver.onCompleted();
+            chainReplicationInstance.addLog("releasing semaphore for exit");
+            System.exit(0);
         }
     }
 }

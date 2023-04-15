@@ -137,9 +137,8 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
 
     @Override
     public void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
-        try {
+        synchronized (chainReplicationInstance) {
             chainReplicationInstance.addLog("trying to acquire semaphore in ack");
-            chainReplicationInstance.ackSemaphore.acquire();
             chainReplicationInstance.addLog("ack grpc called");
             int xid = request.getXid();
 
@@ -157,12 +156,6 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             }
             responseObserver.onNext(AckResponse.newBuilder().build());
             responseObserver.onCompleted();
-        } catch (InterruptedException e) {
-            chainReplicationInstance.addLog("Problem acquiring semaphore");
-            chainReplicationInstance.addLog(e.getMessage());
-        } finally {
-            chainReplicationInstance.addLog("releasing semaphore for ack");
-            chainReplicationInstance.ackSemaphore.release();
         }
     }
 }

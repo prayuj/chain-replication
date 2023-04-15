@@ -36,7 +36,6 @@ public class ChainReplicationInstance {
     HashMap <String, Integer> replicaState;
     List<String> replicas;
     ArrayList <String> logs;
-    final Semaphore ackSemaphore;
     final Semaphore logLock;
 
     ManagedChannel successorChannel;
@@ -59,7 +58,7 @@ public class ChainReplicationInstance {
         replicaState = new HashMap<>();
         logs = new ArrayList<>();
         hasSuccessorContacted = false;
-        ackSemaphore = new Semaphore(1);
+
     }
     void start () throws IOException, InterruptedException, KeeperException {
         zk = new ZooKeeper(zookeeper_server_list, 10000, System.out::println);

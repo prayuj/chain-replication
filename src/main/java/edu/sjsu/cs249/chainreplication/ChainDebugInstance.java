@@ -10,28 +10,43 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
     ChainDebugInstance(ChainReplicationInstance chainReplicationInstance) {
         this.chainReplicationInstance = chainReplicationInstance;
     }
+
+    /*
+    * Method for Debug RPC calls
+    * Without thread safety (especially for logs array), I faced numerous errors where I was getting race conditions
+    * If I make it thread safe, then the client's request deadline completes before my program becomes thread safe
+    * */
+
     @Override
     public void debug(ChainDebugRequest request, StreamObserver<ChainDebugResponse> responseObserver) {
-        ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
-        chainReplicationInstance.addLog("debug grpc called");
-        builder
-            .setXid(chainReplicationInstance.lastUpdateRequestXid)
-            .putAllState(chainReplicationInstance.replicaState)
-            .addAllLogs(chainReplicationInstance.logs);
+//        try {
+//            chainReplicationInstance.logLock.acquire();
+            ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
+            System.out.println("debug grpc called");
+            builder
+                .setXid(chainReplicationInstance.lastUpdateRequestXid)
+                .putAllState(chainReplicationInstance.replicaState)
+                .addAllLogs(chainReplicationInstance.logs);
 
-        for(int key: chainReplicationInstance.pendingUpdateRequests.keySet()) {
-            builder.addSent(UpdateRequest.newBuilder()
-                .setXid(key)
-                .setKey(chainReplicationInstance.pendingUpdateRequests.get(key).key)
-                .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(key).value)
-                .build());
-        }
-        chainReplicationInstance.addLog("xid: " + builder.getXid() +
-                ", state: " + builder.getStateMap() +
-                ", sent: " + builder.getSentList());
-        chainReplicationInstance.addLog("exiting debug synchronized block");
-        responseObserver.onNext(builder.build());
-        responseObserver.onCompleted();
+            for (int key : chainReplicationInstance.pendingUpdateRequests.keySet()) {
+                builder.addSent(UpdateRequest.newBuilder()
+                        .setXid(key)
+                        .setKey(chainReplicationInstance.pendingUpdateRequests.get(key).key)
+                        .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(key).value)
+                        .build());
+            }
+            System.out.println("xid: " + builder.getXid() +
+                    ", state: " + builder.getStateMap() +
+                    ", sent: " + builder.getSentList());
+            System.out.println("exiting debug synchronized block");
+            responseObserver.onNext(builder.build());
+            responseObserver.onCompleted();
+//        } catch (InterruptedException e) {
+//            System.out.println("Problem acquiring semaphore");
+//            System.out.println(e.getMessage());
+//        } finally {
+//            chainReplicationInstance.logLock.release();
+//        }
     }
 
     @Override

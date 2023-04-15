@@ -12,32 +12,32 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
     }
     @Override
     public void debug(ChainDebugRequest request, StreamObserver<ChainDebugResponse> responseObserver) {
-//        synchronized (chainReplicationInstance) {
-            ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
-            chainReplicationInstance.addLog("debug grpc called");
-            builder
-                .setXid(chainReplicationInstance.lastUpdateRequestXid)
-                .putAllState(chainReplicationInstance.replicaState)
-                .addAllLogs(chainReplicationInstance.logs);
+        ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
+        chainReplicationInstance.addLog("debug grpc called");
+        builder
+            .setXid(chainReplicationInstance.lastUpdateRequestXid)
+            .putAllState(chainReplicationInstance.replicaState)
+            .addAllLogs(chainReplicationInstance.logs);
 
-            for(int key: chainReplicationInstance.pendingUpdateRequests.keySet()) {
-                builder.addSent(UpdateRequest.newBuilder()
-                    .setXid(key)
-                    .setKey(chainReplicationInstance.pendingUpdateRequests.get(key).key)
-                    .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(key).value)
-                    .build());
-            }
-            chainReplicationInstance.addLog("xid: " + builder.getXid() +
-                    ", state: " + builder.getStateMap() +
-                    ", sent: " + builder.getSentList());
-            chainReplicationInstance.addLog("exiting debug synchronized block");
-            responseObserver.onNext(builder.build());
-            responseObserver.onCompleted();
-//        }
+        for(int key: chainReplicationInstance.pendingUpdateRequests.keySet()) {
+            builder.addSent(UpdateRequest.newBuilder()
+                .setXid(key)
+                .setKey(chainReplicationInstance.pendingUpdateRequests.get(key).key)
+                .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(key).value)
+                .build());
+        }
+        chainReplicationInstance.addLog("xid: " + builder.getXid() +
+                ", state: " + builder.getStateMap() +
+                ", sent: " + builder.getSentList());
+        chainReplicationInstance.addLog("exiting debug synchronized block");
+        responseObserver.onNext(builder.build());
+        responseObserver.onCompleted();
     }
 
     @Override
     public void exit(ExitRequest request, StreamObserver<ExitResponse> responseObserver) {
+
+        //synchronize and acquire ack semaphore to allow all pending requests to complete before you exit
         synchronized (chainReplicationInstance) {
             try {
                 chainReplicationInstance.ackSemaphore.acquire();
@@ -50,6 +50,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
             } catch (InterruptedException e) {
                 chainReplicationInstance.addLog("Problem acquiring semaphore");
                 chainReplicationInstance.addLog(e.getMessage());
+                System.exit(0);
             }
         }
     }

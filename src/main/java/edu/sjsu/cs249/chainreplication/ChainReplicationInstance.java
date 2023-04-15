@@ -13,6 +13,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 public class ChainReplicationInstance {
     String name;
@@ -115,7 +116,7 @@ public class ChainReplicationInstance {
     private void getChildrenInPath() throws InterruptedException, KeeperException {
         Stat replicaPath = new Stat();
         List<String> children = zk.getChildren(control_path, childrenWatcher(), replicaPath);
-        lastZxidSeen = replicaPath.getPzxid();
+        lastZxidSeen = replicaPath.getPzxid(); //update lastZxidSeen whenever you get a trigger on path
         replicas = children.stream().filter(
                 child -> child.contains("replica-")).toList();
         addLog("Current replicas: " + replicas +
@@ -132,14 +133,13 @@ public class ChainReplicationInstance {
             isHead = sortedReplicas.get(0).equals(myZNodeName);
             isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myZNodeName);
             addLog("isHead: " + isHead + ", isTail: " + isTail);
-
             callPredecessor(sortedReplicas);
             setSuccessorData(sortedReplicas);
         }
     }
 
     void callPredecessor(List<String> sortedReplicas) throws InterruptedException, KeeperException {
-        //Don't need to call predecessor if you're head! Reset predecessor values
+        //Don't need to call predecessor if you're head! Reset predecessor values and channel
         if (isHead) {
             if (predecessorChannel != null) {
                 predecessorChannel.shutdownNow();
@@ -243,36 +243,24 @@ public class ChainReplicationInstance {
         if (isTail && pendingUpdateRequests.size() > 0) {
             addLog("I am tail, have to ack back all pending requests!");
             for (int xid: pendingUpdateRequests.keySet()) {
-                ackXid(xid);
+                ackPredecessor(xid);
             }
         }
     }
 
-    public void ackXid (int xid) {
+    public void ackPredecessor(int xid) {
         addLog("calling ack method of predecessor: " + predecessorAddress);
         lastAckXid = xid;
         pendingUpdateRequests.remove(xid);
         addLog("lastAckXid: " + lastAckXid);
-        var stub = ReplicaGrpc.newBlockingStub(predecessorChannel);
+        var stub = ReplicaGrpc.newBlockingStub(predecessorChannel).withDeadlineAfter(5L, TimeUnit.SECONDS);;
         var ackRequest = AckRequest.newBuilder()
                 .setXid(xid).build();
-        stub.ack(ackRequest/*, new StreamObserver<>() {
-            @Override
-            public void onNext(AckResponse ackResponse) {
-
-            }
-
-            @Override
-            public void onError(Throwable throwable) {
-                addLog("Error occurred during ack grpc calls, cause " + throwable.getMessage());
-                channel.shutdownNow();
-            }
-
-            @Override
-            public void onCompleted() {
-                channel.shutdownNow();
-            }
-        }*/);
+        try {
+            stub.ack(ackRequest);
+        } catch (io.grpc.StatusRuntimeException rE) {
+            addLog("error while executing gRPC in ackXid");
+        }
     }
 
     public void updateSuccessor(String key, int newValue, int xid) {
@@ -282,13 +270,17 @@ public class ChainReplicationInstance {
                     ", xid: " + xid +
                     ", key: " + key +
                     ", newValue: " + newValue);
-            var stub = ReplicaGrpc.newBlockingStub(successorChannel);
+            var stub = ReplicaGrpc.newBlockingStub(successorChannel).withDeadlineAfter(5L, TimeUnit.SECONDS);
             var updateRequest = UpdateRequest.newBuilder()
                     .setXid(xid)
                     .setKey(key)
                     .setNewValue(newValue)
                     .build();
-            stub.update(updateRequest);
+            try {
+                stub.update(updateRequest);
+            } catch (io.grpc.StatusRuntimeException rE) {
+                addLog("error while executing gRPC in updateSuccessor");
+            }
         }
     }
 

@@ -33,7 +33,6 @@ public class ChainReplicationInstance {
     HashMap <String, Integer> replicaState;
     List<String> replicas;
     ArrayList <String> logs;
-    final Semaphore logLock;
     ManagedChannel successorChannel;
     ManagedChannel predecessorChannel;
     QueueableRequest<UpdateRequest> successorQueue;
@@ -58,7 +57,6 @@ public class ChainReplicationInstance {
         replicaState = new HashMap<>();
         logs = new ArrayList<>();
         hasSuccessorContacted = false;
-        logLock = new Semaphore(1);
         successorQueue = new QueueableRequest<>(this);
         predecessorQueue = new QueueableRequest<>(this);
 
@@ -305,17 +303,9 @@ public class ChainReplicationInstance {
     }
 
     public void addLog(String message) {
-        try {
-            logLock.acquire();
-            Timestamp timestamp = new Timestamp(System.currentTimeMillis());
-            logs.add(timestamp + " " + message);
-            System.out.println(timestamp + " " + message);
-        } catch (InterruptedException e) {
-            System.out.println("Problem acquiring semaphore");
-            System.out.println(e.getMessage());
-        } finally {
-            logLock.release();
-        }
+        Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+        logs.add(timestamp + " " + message);
+        System.out.println(timestamp + " " + message);
     }
 }
 

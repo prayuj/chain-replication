@@ -88,7 +88,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     public void successorProcedure(int lastAck, int lastXid, String znodeName, StreamObserver<NewSuccessorResponse> responseObserver) {
         NewSuccessorResponse.Builder builder = NewSuccessorResponse.newBuilder();
         builder.setRc(1);
-
+//        chainReplicationInstance.predecessorQueue.pause();
         //If lastXid is -1, send all state
         if (lastXid == -1) {
             builder.setRc(0)
@@ -130,6 +130,8 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
         } catch (InterruptedException | KeeperException e) {
             chainReplicationInstance.addLog("error in getting successor address from zookeeper");
         }
+        chainReplicationInstance.addLog("successfully connected to successor, resuming successorQueue");
+//        chainReplicationInstance.predecessorQueue.play();
         chainReplicationInstance.hasSuccessorContacted = true;
         responseObserver.onNext(builder.build());
         responseObserver.onCompleted();
@@ -138,7 +140,6 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     @Override
     public void ack(AckRequest request, StreamObserver<AckResponse> responseObserver) {
         synchronized (chainReplicationInstance) {
-            chainReplicationInstance.addLog("trying to acquire semaphore in ack");
             chainReplicationInstance.addLog("ack grpc called");
             int xid = request.getXid();
 

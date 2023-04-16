@@ -30,10 +30,10 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
 
             chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
             chainReplicationInstance.addLog("hasSuccessorContacted: " + chainReplicationInstance.hasSuccessorContacted);
-            if (chainReplicationInstance.isTail) {
+            if (chainReplicationInstance.isTail || !chainReplicationInstance.hasSuccessorContacted) {
                 chainReplicationInstance.addLog("I am tail, ack back!");
                 chainReplicationInstance.ackPredecessor(xid);
-            } else if (chainReplicationInstance.hasSuccessorContacted) {
+            } else {
                 chainReplicationInstance.updateSuccessor(key, newValue, xid);
             }
             responseObserver.onNext(UpdateResponse.newBuilder().build());

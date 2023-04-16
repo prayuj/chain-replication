@@ -51,8 +51,10 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
             System.out.println("Exiting Program!");
             responseObserver.onNext(ExitResponse.newBuilder().build());
             responseObserver.onCompleted();
-            chainReplicationInstance.addLog("releasing semaphore for exit");
-            while (!chainReplicationInstance.successorQueue.isEmpty() || !chainReplicationInstance.predecessorQueue.isEmpty()) {
+            while (!chainReplicationInstance.successorQueue.isEmpty()
+                    || !chainReplicationInstance.predecessorQueue.isEmpty()
+                    || !chainReplicationInstance.successorQueue.isProcessing()
+                    || !chainReplicationInstance.predecessorQueue.isProcessing()) {
                 try {
                     Thread.sleep(100);
                 } catch (InterruptedException e) {
@@ -60,6 +62,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
                     // Handle InterruptedException
                 }
             }
+            System.out.println("Pending request fulfilled");
             System.exit(0);
         }
     }

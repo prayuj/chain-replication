@@ -12,12 +12,13 @@ import java.util.concurrent.TimeUnit;
 public class QueueableRequest<T> extends Thread {
     private final BlockingQueue<T> requestQueue;
     ChainReplicationInstance chainReplicationInstance;
-    private boolean isPaused;
+
+    private boolean isExecuting;
 
     public QueueableRequest(ChainReplicationInstance chainReplicationInstance) {
         requestQueue = new LinkedBlockingQueue<>();
         this.chainReplicationInstance = chainReplicationInstance;
-        isPaused = false;
+        isExecuting = false;
     }
 
     public void submitRequest(T request) {
@@ -28,11 +29,8 @@ public class QueueableRequest<T> extends Thread {
         return requestQueue.isEmpty();
     }
 
-    public void pause() {
-        isPaused = true;
-    }
-    public void play() {
-        isPaused = false;
+    public boolean isProcessing() {
+        return isExecuting;
     }
 
     @Override
@@ -40,12 +38,6 @@ public class QueueableRequest<T> extends Thread {
         while (true) {
             try {
                 T request = requestQueue.take();
-
-                // Check if queue is paused
-                while (isPaused) {
-                    Thread.sleep(100);
-                }
-
                 executeRequest(request);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -58,7 +50,7 @@ public class QueueableRequest<T> extends Thread {
         int retryCount = 0;
         boolean success = false;
         int delay = chainReplicationInstance.RETRY_INTERVAL; // initial delay time in milliseconds
-
+        isExecuting = true;
         while (!success && retryCount < chainReplicationInstance.MAX_RETRIES) {
             try {
                 if (request instanceof UpdateRequest) {
@@ -86,6 +78,7 @@ public class QueueableRequest<T> extends Thread {
             // retries failed, so log an error message
             System.err.println("Failed to execute the request after " + chainReplicationInstance.MAX_RETRIES + " retries: " + request);
         }
+        isExecuting = false;
     }
 
 }

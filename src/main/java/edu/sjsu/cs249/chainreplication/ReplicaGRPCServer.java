@@ -29,7 +29,7 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             chainReplicationInstance.pendingUpdateRequests.put(xid, new HashTableEntry(key, newValue));
 
             chainReplicationInstance.addLog("isTail: " + chainReplicationInstance.isTail);
-
+            chainReplicationInstance.addLog("hasSuccessorContacted: " + chainReplicationInstance.hasSuccessorContacted);
             if (chainReplicationInstance.isTail) {
                 chainReplicationInstance.addLog("I am tail, ack back!");
                 chainReplicationInstance.ackPredecessor(xid);

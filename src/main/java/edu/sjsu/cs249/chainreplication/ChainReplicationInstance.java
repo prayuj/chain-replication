@@ -8,10 +8,7 @@ import org.apache.zookeeper.data.Stat;
 
 import java.io.IOException;
 import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
@@ -37,11 +34,12 @@ public class ChainReplicationInstance {
     List<String> replicas;
     ArrayList <String> logs;
     final Semaphore logLock;
-
     ManagedChannel successorChannel;
     ManagedChannel predecessorChannel;
     QueueableRequest<UpdateRequest> successorQueue;
     QueueableRequest<AckRequest> predecessorQueue;
+    final int MAX_RETRIES = 4;
+    final int RETRY_INTERVAL = 200;
 
     ChainReplicationInstance(String name, String grpcHostPort, String zookeeper_server_list, String control_path) {
         this.name = name;
@@ -60,6 +58,9 @@ public class ChainReplicationInstance {
         replicaState = new HashMap<>();
         logs = new ArrayList<>();
         hasSuccessorContacted = false;
+        logLock = new Semaphore(1);
+        successorQueue = new QueueableRequest<>(this);
+        predecessorQueue = new QueueableRequest<>(this);
 
     }
     void start () throws IOException, InterruptedException, KeeperException {
@@ -68,8 +69,10 @@ public class ChainReplicationInstance {
         myZNodeName = pathName.replace(control_path + "/", "");
         addLog("Created znode name: " + myZNodeName);
 
-        this.getChildrenInPath();
-        this.callPredecessorAndSetSuccessorData();
+        synchronized (this) {
+            this.getChildrenInPath();
+            this.callPredecessorAndSetSuccessorData();
+        }
 
         HeadChainReplicaGRPCServer headChainReplicaGRPCServer = new HeadChainReplicaGRPCServer(this);
         TailChainReplicaGRPCServer tailChainReplicaGRPCServer = new TailChainReplicaGRPCServer(this);
@@ -83,7 +86,9 @@ public class ChainReplicationInstance {
                 .addService(chainDebugInstance)
                 .build();
         server.start();
-        System.out.printf("will listen on port %s\n", server.getPort());
+        successorQueue.start();
+        predecessorQueue.start();
+        addLog("will listen on port " + server.getPort());
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 zk.close();
@@ -99,13 +104,15 @@ public class ChainReplicationInstance {
 
     private Watcher childrenWatcher() {
         return watchedEvent -> {
-            ChainReplicationInstance.this.addLog("childrenWatcher triggered");
-            ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
-            try {
-                ChainReplicationInstance.this.getChildrenInPath();
-                ChainReplicationInstance.this.callPredecessorAndSetSuccessorData();
-            } catch (InterruptedException | KeeperException e) {
-                ChainReplicationInstance.this.addLog("Error getting children with getChildrenInPath()");
+            synchronized (this) {
+                ChainReplicationInstance.this.addLog("childrenWatcher triggered");
+                ChainReplicationInstance.this.addLog("WatchedEvent: " + watchedEvent.getType() + " on " + watchedEvent.getPath());
+                try {
+                    ChainReplicationInstance.this.getChildrenInPath();
+                    ChainReplicationInstance.this.callPredecessorAndSetSuccessorData();
+                } catch (InterruptedException | KeeperException e) {
+                    ChainReplicationInstance.this.addLog("Error getting children with getChildrenInPath()");
+                }
             }
         };
     }
@@ -131,13 +138,11 @@ public class ChainReplicationInstance {
      */
     void callPredecessorAndSetSuccessorData() throws InterruptedException, KeeperException {
         List<String> sortedReplicas = replicas.stream().sorted(Comparator.naturalOrder()).toList();
-        synchronized (this) {
-            isHead = sortedReplicas.get(0).equals(myZNodeName);
-            isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myZNodeName);
-            addLog("isHead: " + isHead + ", isTail: " + isTail);
-            callPredecessor(sortedReplicas);
-            setSuccessorData(sortedReplicas);
-        }
+        isHead = sortedReplicas.get(0).equals(myZNodeName);
+        isTail = sortedReplicas.get(sortedReplicas.size() - 1).equals(myZNodeName);
+        addLog("isHead: " + isHead + ", isTail: " + isTail);
+        callPredecessor(sortedReplicas);
+        setSuccessorData(sortedReplicas);
     }
 
     void callPredecessor(List<String> sortedReplicas) throws InterruptedException, KeeperException {
@@ -173,7 +178,7 @@ public class ChainReplicationInstance {
 
             predecessorAddress = newPredecessorAddress;
             predecessorChannel = this.createChannel(predecessorAddress);
-            var stub = ReplicaGrpc.newBlockingStub(predecessorChannel);
+            var stub = ReplicaGrpc.newBlockingStub(predecessorChannel).withDeadlineAfter(3L, TimeUnit.SECONDS);
             var newSuccessorRequest = NewSuccessorRequest.newBuilder()
                     .setLastZxidSeen(lastZxidSeen)
                     .setLastXid(lastUpdateRequestXid)
@@ -184,12 +189,7 @@ public class ChainReplicationInstance {
             addLog("Response received");
             addLog("rc: " + rc);
             if (rc == -1) {
-                try {
-                    getChildrenInPath();
-                    callPredecessorAndSetSuccessorData();
-                } catch (InterruptedException | KeeperException e) {
-                    addLog("Error getting children with getChildrenInPath()");
-                }
+
             } else if (rc == 0) {
                 lastUpdateRequestXid = newSuccessorResponse.getLastXid();
                 addLog("lastUpdateRequestXid: " + lastUpdateRequestXid);
@@ -215,6 +215,12 @@ public class ChainReplicationInstance {
             successorZNode = "";
             successorAddress = "";
             hasSuccessorContacted = false;
+
+            addLog("I am tail, have to ack back any pending requests!");
+            Set<Integer> keySet = new HashSet<>(pendingUpdateRequests.keySet());
+            for (int xid : keySet) {
+                ackPredecessor(xid);
+            }
             return;
         }
 
@@ -244,7 +250,7 @@ public class ChainReplicationInstance {
     }
 
     public void ackPredecessor(int xid) {
-        addLog("calling ack method of predecessor: " + predecessorAddress);
+        addLog("queuing ack method of predecessor: " + predecessorAddress);
         lastAckXid = xid;
         pendingUpdateRequests.remove(xid);
         addLog("lastAckXid: " + lastAckXid);
@@ -254,7 +260,7 @@ public class ChainReplicationInstance {
     }
 
     public void updateSuccessor(String key, int newValue, int xid) {
-        addLog("making update call to successor: " + successorAddress);
+        addLog("queuing update call to successor: " + successorAddress);
         addLog("params:" +
                 ", xid: " + xid +
                 ", key: " + key +
@@ -268,13 +274,34 @@ public class ChainReplicationInstance {
     }
 
     public ManagedChannel createChannel(String serverAddress){
+        ManagedChannel channel = null;
+        int retries = 0;
         var lastColon = serverAddress.lastIndexOf(':');
         var host = serverAddress.substring(0, lastColon);
         var port = Integer.parseInt(serverAddress.substring(lastColon+1));
-        return ManagedChannelBuilder
-                .forAddress(host, port)
-                .usePlaintext()
-                .build();
+        int delay = RETRY_INTERVAL;
+        while (retries < MAX_RETRIES && channel == null) {
+            try {
+                channel = ManagedChannelBuilder
+                        .forAddress(host, port)
+                        .usePlaintext()
+                        .build();
+            } catch (Exception e) {
+                System.err.println("Failed to create channel to " + serverAddress + ". Retrying in " + RETRY_INTERVAL + " milliseconds");
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException ex) {
+                    // Handle the exception
+                }
+                retries++;
+                delay *= 2;
+            }
+        }
+        if (channel == null) {
+            // Throw an exception if the channel could not be created after max retries
+            throw new RuntimeException("Could not create channel to " + serverAddress);
+        }
+        return channel;
     }
 
     public void addLog(String message) {

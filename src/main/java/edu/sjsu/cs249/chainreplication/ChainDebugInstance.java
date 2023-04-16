@@ -19,8 +19,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
 
     @Override
     public void debug(ChainDebugRequest request, StreamObserver<ChainDebugResponse> responseObserver) {
-//        try {
-//            chainReplicationInstance.logLock.acquire();
+        synchronized (chainReplicationInstance) {
             ChainDebugResponse.Builder builder = ChainDebugResponse.newBuilder();
             System.out.println("debug grpc called");
             builder
@@ -41,12 +40,7 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
             System.out.println("exiting debug synchronized block");
             responseObserver.onNext(builder.build());
             responseObserver.onCompleted();
-//        } catch (InterruptedException e) {
-//            System.out.println("Problem acquiring semaphore");
-//            System.out.println(e.getMessage());
-//        } finally {
-//            chainReplicationInstance.logLock.release();
-//        }
+        }
     }
 
     @Override

@@ -53,8 +53,8 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
             responseObserver.onCompleted();
             while (!chainReplicationInstance.successorQueue.isEmpty()
                     || !chainReplicationInstance.predecessorQueue.isEmpty()
-                    || !chainReplicationInstance.successorQueue.isProcessing()
-                    || !chainReplicationInstance.predecessorQueue.isProcessing()) {
+                    || chainReplicationInstance.successorQueue.isProcessing()
+                    || chainReplicationInstance.predecessorQueue.isProcessing()) {
                 try {
                     Thread.sleep(100);
                 } catch (InterruptedException e) {

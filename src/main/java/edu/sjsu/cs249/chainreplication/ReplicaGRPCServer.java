@@ -6,6 +6,9 @@ import edu.sjsu.cs249.chain.*;
 import io.grpc.stub.StreamObserver;
 import org.apache.zookeeper.KeeperException;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Objects;
 
 public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
@@ -88,17 +91,17 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
     public void successorProcedure(int lastAck, int lastXid, String znodeName, StreamObserver<NewSuccessorResponse> responseObserver) {
         NewSuccessorResponse.Builder builder = NewSuccessorResponse.newBuilder();
         builder.setRc(1);
-//        chainReplicationInstance.predecessorQueue.pause();
         //If lastXid is -1, send all state
         if (lastXid == -1) {
             builder.setRc(0)
                 .putAllState(chainReplicationInstance.replicaState);
         }
 
+        List<UpdateRequest> sentList = new ArrayList<>();
         // send update request starting from their lastXid + 1 till your lastXid
         for (int xid = lastXid + 1; xid <= chainReplicationInstance.lastUpdateRequestXid; xid += 1) {
             if (chainReplicationInstance.pendingUpdateRequests.containsKey(xid)) {
-                builder.addSent(UpdateRequest.newBuilder()
+                sentList.add(UpdateRequest.newBuilder()
                         .setXid(xid)
                         .setKey(chainReplicationInstance.pendingUpdateRequests.get(xid).key)
                         .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(xid).value)
@@ -106,7 +109,10 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             }
         }
 
-        // ack back request start from your lastAck till their last ack
+        List<UpdateRequest> sortedSentList = sentList.stream().sorted(Comparator.comparingInt(UpdateRequest::getXid)).toList();
+        builder.addAllSent(sortedSentList);
+
+        // ack back request starting from your lastAck till their last ack
         for (int myAckXid = chainReplicationInstance.lastAckXid + 1; myAckXid <= lastAck; myAckXid += 1) {
             chainReplicationInstance.ackPredecessor(myAckXid);
         }
@@ -131,7 +137,6 @@ public class ReplicaGRPCServer extends ReplicaGrpc.ReplicaImplBase {
             chainReplicationInstance.addLog("error in getting successor address from zookeeper");
         }
         chainReplicationInstance.addLog("successfully connected to successor, resuming successorQueue");
-//        chainReplicationInstance.predecessorQueue.play();
         chainReplicationInstance.hasSuccessorContacted = true;
         responseObserver.onNext(builder.build());
         responseObserver.onCompleted();

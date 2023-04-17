@@ -3,6 +3,10 @@ package edu.sjsu.cs249.chainreplication;
 import edu.sjsu.cs249.chain.*;
 import io.grpc.stub.StreamObserver;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
 public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
 
     final ChainReplicationInstance chainReplicationInstance;
@@ -27,13 +31,18 @@ public class ChainDebugInstance extends ChainDebugGrpc.ChainDebugImplBase{
                 .putAllState(chainReplicationInstance.replicaState)
                 .addAllLogs(chainReplicationInstance.logs);
 
+            List<UpdateRequest> sentList = new ArrayList<>();
             for (int key : chainReplicationInstance.pendingUpdateRequests.keySet()) {
-                builder.addSent(UpdateRequest.newBuilder()
+                sentList.add(UpdateRequest.newBuilder()
                         .setXid(key)
                         .setKey(chainReplicationInstance.pendingUpdateRequests.get(key).key)
                         .setNewValue(chainReplicationInstance.pendingUpdateRequests.get(key).value)
                         .build());
             }
+
+            List<UpdateRequest> sortedSentList = sentList.stream().sorted(Comparator.comparingInt(UpdateRequest::getXid)).toList();
+            builder.addAllSent(sortedSentList);
+
             System.out.println("xid: " + builder.getXid() +
                     ", state: " + builder.getStateMap() +
                     ", sent: " + builder.getSentList());

@@ -9,7 +9,6 @@ import org.apache.zookeeper.data.Stat;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.util.*;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 public class ChainReplicationInstance {

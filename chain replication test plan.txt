@@ -1,0 +1,84 @@
+﻿zookeeper hell ensemble
+if a request path starts with “hell-”, the following will happen:
+* the session will be marked as a “hell” session
+* the first create request will cause the zookeeper connection to be immediately dropped
+* the second create request will also cause the zookeeper connection to be immediately dropped, but the create will be processed
+* every 10 seconds the zookeeper server will drop the connection for “hell” sessions
+
+
+simple basic test
+using keys {A, key1, B, key2, C, key3, D, key4}
+1. get all the keys. they should all be 0
+2. inc the keys by {1, 3, 5, 7, 11, 13, 17, 23} respectively one at a time
+3. get all the keys, they should be {1, 3, 5, 7, 11, 13, 17, 23} /* we will need to calculate these in the repetitive tests */
+4. inc the keys by {4, 3, 2, 1, -1, -2, -3, -4} respectively one at a time
+5. get all the keys, they should be {5, 6, 7, 8, 10, 11, 14, 19} /* we will need to calculate these is the repetitive tests */
+6. get all the keys with “x” appended, they should all be 0
+
+
+concurrent basic test
+run the simple basic test but do all the gets and incs concurrently (start them all asynchronously at the same time)
+
+
+checked concurrent basic test
+run the concurrent basic test but debug chain after initiating each inc (will be different but consistent) and after all the gets (should be exactly the same)
+
+
+basic test variants with drops
+run the checked concurrent basic test with the following drop patterns until everyone has been the head:
+* run test
+* kill head
+* run test
+* restart old head (will now be tail)
+* run test
+
+
+basic test variants with drops and delay
+* do the basic test variants with drops rotating in a delaying replica
+
+
+hell checked concurrent basic test
+checked concurrent basic test running against the zookeeper hell ensemble wait the hell timeout between 3&4
+
+
+
+
+The above tests are scripted to run with the chainrep jar file
+
+
+1. BASE TEST:
+
+
+java -jar target/chainrep-1.48.1-spring-boot.jar --zk=zookeeper.class.homeofcode.com --znode=/CHAINNAME test --check-chain --concurrent
+
+
+
+
+java -jar target/chainrep-1.48.1-spring-boot.jar --zk=zookeeper.class.homeofcode.com --znode=/CHAINNAME testNot
+
+
+2. TAIL REPLACE: start chain then run the following until only one in the chain
+
+
+java -jar target/chainrep-1.48.1-spring-boot.jar --zk=zookeeper.class.homeofcode.com --znode=/CHAINNAME test --check-chain --concurrent –kill-tail
+
+
+        run the test again with the head of the chain in the middle to start the test
+
+
+3. HEAD REPLACE WITH DELAY: start chain then add a replica with a delay of 2 at the end. run the following restarting the old head at the start of each run until the delay replica is the head
+
+
+java -jar target/chainrep-1.48.1-spring-boot.jar --zk=zookeeper.class.homeofcode.com --znode=/CHAINNAME test --check-chain --concurrent –kill-tail
+
+
+4. TAIL BLAST: start with a chain and each person adds a second replica. wait a couple of seconds between each replica start. (may need to adjust the numbers to make it run long enough for everyone to add a tail.)
+
+
+java -jar target/chainrep-1.48.1-spring-boot.jar --zk=zookeeper.class.homeofcode.com --znode=/CHAINNAME testBlast 10000 20
+
+
+5. HELL TAIL REPLACE: run 2) on a /hell chain
+
+
+6. HELL TAIL  BLAST: run 4) on a /hell chain
